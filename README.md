@@ -46,7 +46,7 @@ Open API 与网页版使用**不同的 ID**，请按 `MaiMemo:Provider` 选择�
 
 **Open API 模式（推荐）：**
 
-1. 用 Token 请求 [GET /open/api/v1/notepads](https://open.maimemo.com/)
+1. 用 Token 请求 [GET /open/api/v1/memo/notepads](https://open.maimemo.com/)
 2. 在响应中找到目标词库的 `id` 字段，格式为 `np-` 开头的长字符串
 3. 填入 `MaiMemo:DefaultNotepadId`
 
@@ -208,7 +208,7 @@ HTTP 非成功响应会记录请求方法、脱敏 URL、数字状态码及服�
 
 获取 GitHub Actions 诊断日志：将修复提交推送到 GitHub 后，进入 **Actions → Sync Words → Run workflow**，选择包含修复的分支并启动一次。展开 **sync → Run Sync**，查找 `HTTP 请求失败`。请启动新运行；旧运行的 **Re-run jobs** 使用旧提交，不会自动加载这次修复。无需修改 Secrets。
 
-2026-10-15 核对[墨墨官方 OpenAPI 规范](https://open.maimemo.com/api_bundle.yaml)：当前云词本读取路径为 `GET https://open.maimemo.com/open/api/v1/memo/notepads/{id}`，认证为 `Authorization: Bearer <token>`。本项目当前使用的旧路径不含 `/memo`，认证格式符合官方说明。此次仅增加诊断，保留现有请求路径，路径差异是否导致 400 仍需结合服务器错误信息确认。
+2026-10-15 核对[墨墨官方 OpenAPI 规范](https://open.maimemo.com/api_bundle.yaml)：生产服务器为 `https://open.maimemo.com/open`，云词本列表使用 `GET /api/v1/memo/notepads`，详情使用 `GET /api/v1/memo/notepads/{id}`，更新使用 `POST /api/v1/memo/notepads/{id}`。项目三处请求统一包含 `/memo`，认证仍为 `Authorization: Bearer <token>`。此次路径修复保留原有词本 ID、合并逻辑、Secrets 和脱敏诊断；真实同步结果需通过后续手动运行确认。
 
 ## Todo
 

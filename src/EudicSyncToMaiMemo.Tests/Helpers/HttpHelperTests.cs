@@ -10,7 +10,7 @@ namespace EudicSyncToMaiMemo.Tests.Helpers;
 
 public class HttpHelperTests
 {
-    private const string NotepadUrl = "https://open.maimemo.com/open/api/v1/notepads/np-test";
+    private const string NotepadUrl = "https://open.maimemo.com/open/api/v1/memo/notepads/np-test";
 
     [Theory]
     [InlineData(false)]

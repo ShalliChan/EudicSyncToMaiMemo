@@ -18,7 +18,8 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
         INotificationService notificationService,
         ILogger<MaiMemoOpenApiService> logger) : IMaiMemoService
     {
-        private const string ApiBaseUrl = "https://open.maimemo.com/open/api/v1/";
+        // 官方 api_bundle.yaml：生产 server /open + 云词本路径 /api/v1/memo/notepads。
+        private const string ApiBaseUrl = "https://open.maimemo.com/open/api/v1/memo/";
         private const int NotepadListPageSize = 100;
 
         /// <inheritdoc />
@@ -56,7 +57,7 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             if (string.IsNullOrWhiteSpace(title))
             {
                 throw new ConfigurationException(
-                    "Open API 模式的 DefaultNotepadId 需为 np- 开头的词库 ID，请通过 GET /notepads 获取");
+                    "Open API 模式的 DefaultNotepadId 需为 np- 开头的词库 ID，请通过 GET /api/v1/memo/notepads 获取");
             }
 
             var notepads = await ListNotepadsAsync(cancellationToken);
