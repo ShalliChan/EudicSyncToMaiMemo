@@ -1,0 +1,19 @@
+name: MaiMemo Read-only Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+      - name: Diagnose MaiMemo (GET only)
+        shell: pwsh
+        run: ./scripts/diagnose-maimemo.ps1
+        env:
+          MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}

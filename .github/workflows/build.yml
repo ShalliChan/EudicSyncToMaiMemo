@@ -29,3 +29,7 @@ jobs:
 
     - name: Test
       run: dotnet test src/EudicSyncToMaiMemo.slnx --no-build --verbosity normal
+
+    - name: Test read-only MaiMemo diagnostics
+      shell: pwsh
+      run: ./scripts/test-maimemo-diagnostics.ps1
