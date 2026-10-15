@@ -1,11 +1,13 @@
 ﻿using System.Text;
 
+using Microsoft.Extensions.Logging;
+
 namespace EudicSyncToMaiMemo.Infrastructure.Helpers
 {
     /// <summary>
     /// 基于 IHttpClientFactory 的 HTTP 请求实现
     /// </summary>
-    public class HttpHelper(IHttpClientFactory httpClientFactory) : IHttpHelper
+    public class HttpHelper(IHttpClientFactory httpClientFactory, ILogger<HttpHelper> logger) : IHttpHelper
     {
         private readonly HttpClient _httpClient = httpClientFactory.CreateClient();
 
@@ -25,8 +27,8 @@ namespace EudicSyncToMaiMemo.Infrastructure.Helpers
                 }
             }
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            await EnsureSuccessAsync(request, response, cancellationToken);
 
             return await response.Content.ReadAsStringAsync(cancellationToken);
         }
@@ -52,8 +54,8 @@ namespace EudicSyncToMaiMemo.Infrastructure.Helpers
                 }
             }
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            await EnsureSuccessAsync(request, response, cancellationToken);
 
             return await response.Content.ReadAsStringAsync(cancellationToken);
         }
@@ -84,9 +86,9 @@ namespace EudicSyncToMaiMemo.Infrastructure.Helpers
                 }
             }
 
-            var response = await httpClient.SendAsync(request, cancellationToken);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
 
-            response.EnsureSuccessStatusCode();
+            await EnsureSuccessAsync(request, response, cancellationToken);
             string responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
             var cookieCollection = handler.CookieContainer.GetCookies(new Uri(uri));
@@ -95,6 +97,43 @@ namespace EudicSyncToMaiMemo.Infrastructure.Helpers
                 .ToDictionary(cookie => cookie.Name, cookie => cookie.Value);
 
             return (responseBody, cookies);
+        }
+
+        private async Task EnsureSuccessAsync(
+            HttpRequestMessage request,
+            HttpResponseMessage response,
+            CancellationToken cancellationToken)
+        {
+            if (response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            string body;
+            try
+            {
+                body = await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException)
+            {
+                // 不记录读取异常的 Message，它也可能包含未经脱敏的 URL 或响应内容。
+                body = "[无法读取错误响应正文]";
+            }
+
+            var diagnostics = await HttpErrorDiagnostics.CreateAsync(request, body, cancellationToken);
+            logger.LogError(
+                "HTTP 请求失败：{Method} {RequestUrl}；状态码 {StatusCode} ({Status})；服务器错误：{ResponseBody}",
+                request.Method.Method,
+                diagnostics.Url,
+                (int)response.StatusCode,
+                response.StatusCode,
+                diagnostics.Body);
+
+            // 上层也会记录异常；只携带已脱敏的信息，不附加原始响应或原始异常。
+            throw new HttpRequestException(
+                $"HTTP {(int)response.StatusCode} ({response.StatusCode}): {request.Method} {diagnostics.Url}; 服务器错误：{diagnostics.Body}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
     }
 }

@@ -204,6 +204,12 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 日志默认位于 `%PROGRAMDATA%\EudicSyncToMaiMemo\logs`。GitHub Actions 与 `--sync-once` 模式同时输出到控制台。修改 Serilog `WriteTo` 可调整路径。
 
+HTTP 非成功响应会记录请求方法、脱敏 URL、数字状态码及服务器错误正文；异常消息也只包含脱敏信息。请求头和请求体不输出，URL 查询值与凭证会隐藏，JSON 只保留错误诊断字段，正文最多保留 4096 字符。不会自动重试。
+
+获取 GitHub Actions 诊断日志：将修复提交推送到 GitHub 后，进入 **Actions → Sync Words → Run workflow**，选择包含修复的分支并启动一次。展开 **sync → Run Sync**，查找 `HTTP 请求失败`。请启动新运行；旧运行的 **Re-run jobs** 使用旧提交，不会自动加载这次修复。无需修改 Secrets。
+
+2026-10-15 核对[墨墨官方 OpenAPI 规范](https://open.maimemo.com/api_bundle.yaml)：当前云词本读取路径为 `GET https://open.maimemo.com/open/api/v1/memo/notepads/{id}`，认证为 `Authorization: Bearer <token>`。本项目当前使用的旧路径不含 `/memo`，认证格式符合官方说明。此次仅增加诊断，保留现有请求路径，路径差异是否导致 400 仍需结合服务器错误信息确认。
+
 ## Todo
 
 - [x] MVP 版本：默认词库自动同步（控制台程序）
