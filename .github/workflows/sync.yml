@@ -27,7 +27,7 @@ jobs:
           MaiMemo__Provider: OpenApi
           MaiMemo__Token: ${{ secrets.MAIMEMO_TOKEN }}
           MaiMemo__DefaultNotepadId: "0"
-          MaiMemo__DefaultNotepadTitle: "欧陆词典同步"
+          MaiMemo__DefaultNotepadTitle: "欧路词典同步"
           Notification__Enabled: ${{ secrets.NOTIFICATION_ENABLED }}
           Notification__Url: ${{ secrets.NOTIFICATION_URL }}
           Notification__RequestBody: ${{ secrets.NOTIFICATION_REQUEST_BODY }}
