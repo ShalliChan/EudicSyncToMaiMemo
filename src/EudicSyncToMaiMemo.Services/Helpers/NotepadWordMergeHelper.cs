@@ -8,6 +8,29 @@ namespace EudicSyncToMaiMemo.Services.Helpers
         private static readonly string[] LineSeparators = ["\r\n", "\n"];
 
         /// <summary>
+        /// 去除文本中的控制字符，保留常用排版字符 Tab、CR 和 LF。
+        /// 不裁剪空格或规范化 Unicode，避免改变正常词汇、标点、组合字符和 emoji。
+        /// </summary>
+        public static string RemoveInvalidControlCharacters(string text, out int removedCount)
+        {
+            var cleaned = new System.Text.StringBuilder(text.Length);
+            removedCount = 0;
+            foreach (char character in text)
+            {
+                if (char.IsControl(character) && character is not ('\t' or '\r' or '\n'))
+                {
+                    removedCount++;
+                }
+                else
+                {
+                    cleaned.Append(character);
+                }
+            }
+
+            return cleaned.ToString();
+        }
+
+        /// <summary>
         /// 合并已有行与欧路词表，返回新增词与合并后的行列表
         /// </summary>
         /// <param name="existingLines">云词库现有内容行，含章节行</param>

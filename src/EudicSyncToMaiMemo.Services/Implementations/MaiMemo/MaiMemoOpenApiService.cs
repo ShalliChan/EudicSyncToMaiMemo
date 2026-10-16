@@ -34,8 +34,30 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             string resolvedNotepadId = await ResolveNotepadIdAsync(notepadId, cancellationToken);
 
             var notepad = await GetNotepadAsync(resolvedNotepadId, cancellationToken);
-            var existingLines = NotepadWordMergeHelper.SplitContentLines(notepad.Content);
-            var (newWords, combinedLines) = NotepadWordMergeHelper.Merge(existingLines, eudicWords);
+            // 清理待提交副本，并在去重前处理两侧，防止 app\u0011le 被重复追加为 apple。
+            string existingContent = NotepadWordMergeHelper.RemoveInvalidControlCharacters(
+                notepad.Content, out int existingRemoved);
+            var cleanedWords = new List<string>(eudicWords.Count);
+            int incomingRemoved = 0;
+            foreach (string word in eudicWords)
+            {
+                string cleaned = NotepadWordMergeHelper.RemoveInvalidControlCharacters(word, out int removed);
+                incomingRemoved += removed;
+                if (!string.IsNullOrWhiteSpace(cleaned))
+                {
+                    cleanedWords.Add(cleaned);
+                }
+            }
+
+            if (incomingRemoved > 0 || existingRemoved > 0)
+            {
+                logger.LogWarning(
+                    "墨墨待提交文本已过滤控制字符：欧路 word 字段 {IncomingRemoved} 个，已有 content 字段 {ExistingRemoved} 个；正常文本和合法换行保留",
+                    incomingRemoved, existingRemoved);
+            }
+
+            var existingLines = NotepadWordMergeHelper.SplitContentLines(existingContent);
+            var (newWords, combinedLines) = NotepadWordMergeHelper.Merge(existingLines, cleanedWords);
 
             if (newWords.Count > 0)
             {
