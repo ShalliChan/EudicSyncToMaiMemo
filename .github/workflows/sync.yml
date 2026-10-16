@@ -26,7 +26,7 @@ jobs:
           Eudic__DefaultBookId: ${{ secrets.EUDIC_BOOK_ID }}
           MaiMemo__Provider: OpenApi
           MaiMemo__Token: ${{ secrets.MAIMEMO_TOKEN }}
-          MaiMemo__DefaultNotepadId: "np-WjyfHz1301NWIJnbM7eLZTKDLCxeJL27dh6YefMiEhlhP2v7_az2Ck"
+          MaiMemo__DefaultNotepadId: "np-cl1S2Vg5EuK_r31nfE2l1VOIqxv6SPjV5RpdXoPrb18IbZQDcX6VrtfY1PTS545M"
           Notification__Enabled: ${{ secrets.NOTIFICATION_ENABLED }}
           Notification__Url: ${{ secrets.NOTIFICATION_URL }}
           Notification__RequestBody: ${{ secrets.NOTIFICATION_REQUEST_BODY }}
