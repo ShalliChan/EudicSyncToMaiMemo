@@ -206,7 +206,13 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 ### 临时只读墨墨诊断
 
-进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。此工作流独立于同步，仅使用现有 `MAIMEMO_TOKEN` Secret 发起 GET；目标 ID 从现有 `sync.yml` 中的静态 `MaiMemo__DefaultNotepadId` 配置读取，不新增或复制 ID 配置。不会运行同步或通知、写入或删除词本，也不会输出完整 ID、凭证、响应正文或词本内容。
+进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。当前工作流启用只读内容审计：使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路词条，在内存中调用生产代码的清理、去重、合并函数，重建拟提交的 content。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录正文、原词、Token、完整 ID 或上下文。
+
+审计日志仅有 `source`、`anomaly`、`codepoints`、`count`。对照 `eudic_word_raw`、`notepad_content_raw`、两处 `cleaned` 来源和 `final_content` 的 `literal_dollar_one` 数量，可区分输入已有 `$1`、清理后出现 `$1` 和最终正文不含 `$1`。音标、释义、例句标为 `ignored`，不参与合并；标题、简介、标签标为 `unchanged`，保持生产程序原有行为。审计不会修改原始或拟提交内容来迎合检查。`words_added=0` 时生产程序原本不会 POST。
+
+不可见格式字符、特殊空格、符号、孤立代理项等只输出 Unicode 码位和数量，标为 `candidate` 的条目不等于墨墨不允许该字符，正常 Unicode 不会因此被删除。章节标记位置仅作格式提示。`server_error/not_reproduced_read_only` 明确表示此次没有 POST，不能凭只读审计证明服务器 `$1` 的模板含义，也不能排除两次运行之间数据变化。
+
+以下为原列表/详情诊断模式（未开启 `MAIMEMO_CONTENT_AUDIT`）的日志说明：
 
 每条诊断日志仅有 `http_status`、`error_code`、`target_match`、`pages_scanned`、`scanned_count`。后两项分别为已解析的列表页数（含结束空页）及累计扫描条数，不包括详情，不输出任何 ID。`http_status=0` 表示未取得 HTTP 响应或配置不可用；其余为实际 HTTP 状态码。非成功诊断会让该工作流失败，具体含义见下表：
 

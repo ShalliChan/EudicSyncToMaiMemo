@@ -17,3 +17,6 @@ jobs:
         run: ./scripts/diagnose-maimemo.ps1
         env:
           MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
+          MAIMEMO_CONTENT_AUDIT: 'true'
+          EUDIC_AUTHORIZATION: ${{ secrets.EUDIC_AUTHORIZATION }}
+          EUDIC_BOOK_ID: ${{ secrets.EUDIC_BOOK_ID }}

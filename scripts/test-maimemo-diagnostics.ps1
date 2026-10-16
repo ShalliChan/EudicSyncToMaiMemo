@@ -65,6 +65,47 @@ function Test-Case {
     $script:testCount++
 }
 
+function Test-ContentAudit {
+    param([object[]]$Responses, [string[]]$ExpectedLines, [int]$ExpectedExit = 0)
+    $expectedTarget = $target
+    $expectedToken = $credential
+    $state = @{
+        Responses = [Collections.Generic.Queue[object]]::new()
+        Calls = [Collections.Generic.List[string]]::new()
+        Logs = [Collections.Generic.List[string]]::new()
+    }
+    foreach ($response in $Responses) { $state.Responses.Enqueue($response) }
+    $request = {
+        param($url, $authorization)
+        if ($url.StartsWith('https://open.maimemo.com/')) {
+            if ($url -cne "https://open.maimemo.com/open/api/v1/memo/notepads/$expectedTarget" -or
+                $authorization -cne "Bearer $expectedToken") { throw 'Unexpected MaiMemo GET' }
+        }
+        elseif ($url -cmatch '^https://api\.frdic\.com/api/open/v1/studylist/words\?language=en&category_id=book%20private&page=\d+&page_size=100$') {
+            if ($authorization -cne 'NIS private-eudic-token') { throw 'Unexpected Eudic authorization' }
+            if (!$url.Contains("page=$($state.Calls.Count - 1)&")) { throw 'Incorrect Eudic page' }
+        }
+        else { throw 'Unexpected endpoint' }
+        $state.Calls.Add($url)
+        if ($state.Responses.Count -eq 0) { throw 'Unexpected additional GET' }
+        $response = $state.Responses.Dequeue()
+        if ($response -is [Exception]) { throw $response }
+        return $response
+    }.GetNewClosure()
+    $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
+    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog
+    Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
+    Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
+    foreach ($line in $ExpectedLines) { Assert-Diagnostic ($state.Logs.Contains($line)) "Missing safe audit metric: $line" }
+    foreach ($line in $state.Logs) {
+        Assert-Diagnostic ($line -cmatch '^source=[a-z_]+ anomaly=[a-z0-9_]+ codepoints=(?:none|U\+[0-9A-F]{4,6}(?:,U\+[0-9A-F]{4,6})*) count=\d+$') 'Unexpected audit output'
+        foreach ($secret in @($target, $credential, $privateContent, 'private-eudic-token', 'book private', 'pear', '正常')) {
+            Assert-Diagnostic (!$line.Contains($secret, [StringComparison]::Ordinal)) 'Audit output leaked source text'
+        }
+    }
+    $script:testCount++
+}
+
 try {
     [IO.File]::WriteAllText($workflowFile, "env:`n  MaiMemo__DefaultNotepadId: `"$target`"`n")
     $listed = New-TestResponse -Payload @{ success = $true; data = @{ notepads = @(@{ id = $target; content = $privateContent }) } }
@@ -95,6 +136,58 @@ try {
     Test-Case (@(1..9 | ForEach-Object { $fullPage }) + @($empty, $badId)) 'not_found_detail_failed' 11 -ExpectedScanned 90 -ExpectedPages 10
     Test-Case @((New-TestResponse -Status 400 -Payload @{ errors = @(@{ code = $credential; message = $privateContent }) })) 'unknown' 1 -ExpectedCode 'unavailable'
 
+    $auditNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "apple`n# existing`n$privateContent"; title = 'title$1'; brief = ''; tags = @() } } }
+    $auditWords = New-TestResponse -Payload @{ data = @(@{ word = 'pear$1'; phon = 'phon$1'; exp = $privateContent }, @{ word = 'pear$1' }, @{ word = 'apple' }) }
+    Test-ContentAudit @($auditNotepad, $auditWords) @(
+        'source=eudic_word_raw anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=2',
+        'source=eudic_phon_ignored anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=notepad_content_raw anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0',
+        'source=final_content anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=notepad_title_unchanged anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=merge anomaly=words_added codepoints=none count=1'
+    )
+    $plainNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "# existing`napple" } } }
+    $controlWord = '$' + [char]17 + '1'
+    Test-ContentAudit @($plainNotepad, (New-TestResponse -Payload @{ data = @(@{ word = $controlWord }) })) @(
+        'source=eudic_word_raw anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0',
+        'source=eudic_word_raw anomaly=control_candidate codepoints=U+0011 count=1',
+        'source=eudic_word_cleaned anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=final_content anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1'
+    )
+    Test-ContentAudit @($plainNotepad, (New-TestResponse -Payload @{ data = @(@{ word = '$' }, @{ word = '1' }, @{ word = "正常`u{200B}`u{00A0}👩‍💻" }) })) @(
+        'source=final_content anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0',
+        'source=final_content anomaly=invisible_format_candidate codepoints=U+200B count=1',
+        'source=final_content anomaly=invisible_format_candidate codepoints=U+200D count=1',
+        'source=final_content anomaly=unicode_space_candidate codepoints=U+00A0 count=1',
+        'source=final_content anomaly=symbol_candidate codepoints=U+1F469 count=1'
+    )
+    $existingLiteral = New-TestResponse -Payload @{ data = @{ notepad = @{ id = $target; content = '# $1' } } }
+    Test-ContentAudit @($existingLiteral, (New-TestResponse -Payload @{ data = @() })) @(
+        'source=notepad_content_raw anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=final_content anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=1',
+        'source=merge anomaly=words_added codepoints=none count=0'
+    )
+    $hundredWords = New-TestResponse -Payload @{ data = @(1..100 | ForEach-Object { @{ word = "word$_" } }) }
+    Test-ContentAudit @($plainNotepad, $hundredWords, (New-TestResponse -Payload @{ data = @(@{ word = 'last' }) })) @(
+        'source=eudic_word_raw anomaly=entries_scanned codepoints=none count=101',
+        'source=merge anomaly=words_added codepoints=none count=101'
+    )
+    Test-ContentAudit @((New-TestResponse -Status 401 -Payload @{ errors = @(@{ message = $privateContent }) })) @(
+        'source=maimemo_fetch anomaly=http_401 codepoints=none count=1'
+    ) -ExpectedExit 1
+    Test-ContentAudit @($plainNotepad, (New-TestResponse -Payload @{ data = @(@{ word = $null }) })) @(
+        'source=eudic_fetch anomaly=unexpected_response codepoints=none count=1'
+    ) -ExpectedExit 1
+    Test-ContentAudit @(@{ Status = 200; Body = "$privateContent private-eudic-token <invalid-json>" }) @(
+        'source=maimemo_fetch anomaly=unexpected_response codepoints=none count=1'
+    ) -ExpectedExit 1
+    Test-ContentAudit @($plainNotepad, (New-TestResponse -Status 403 -Payload @{ message = "$privateContent $credential" })) @(
+        'source=eudic_fetch anomaly=http_403 codepoints=none count=1'
+    ) -ExpectedExit 1
+    Test-ContentAudit @($plainNotepad, [InvalidOperationException]::new("$privateContent $credential")) @(
+        'source=eudic_fetch anomaly=transport_error codepoints=none count=1'
+    ) -ExpectedExit 1
+
     # 配置解析必须与现有 sync.yml 一致；拒绝多目标/动态表达式，不猜测 ID。
     $actualId = Get-MaiMemoDiagnosticTargetId (Join-Path $PSScriptRoot '../.github/workflows/sync.yml')
     Assert-Diagnostic ($actualId.StartsWith('np-')) 'Existing static target not recognized'
@@ -109,8 +202,13 @@ try {
     $workflow = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../.github/workflows/maimemo-diagnostics.yml'))
     Assert-Diagnostic ($workflow.Contains('workflow_dispatch:') -and !$workflow.Contains('Run Sync') -and !$workflow.Contains('dotnet run')) 'Diagnostic workflow can invoke sync'
     Assert-Diagnostic ($workflow.Contains('${{ secrets.MAIMEMO_TOKEN }}')) 'Existing Secret not used'
+    Assert-Diagnostic ($workflow.Contains('${{ secrets.EUDIC_AUTHORIZATION }}') -and $workflow.Contains('${{ secrets.EUDIC_BOOK_ID }}')) 'Existing Eudic Secrets not used'
 
     # 本机 TCP 服务核验真正发出的 HTTP，避免 Mock 掩盖参数/认证头格式问题。
+    foreach ($wireCase in @(
+        @{ Path = '/open/api/v1/memo/notepads?limit=10&offset=0'; Credential = $credential; Raw = $false; ExpectedAuth = "Bearer $credential" },
+        @{ Path = '/api/open/v1/studylist/words?language=en&category_id=book%20private&page=0&page_size=100'; Credential = 'NIS private-eudic-token'; Raw = $true; ExpectedAuth = 'NIS private-eudic-token' }
+    )) {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
     $server = [PowerShell]::Create()
@@ -136,16 +234,17 @@ try {
             finally { $client.Dispose() }
         }).AddArgument($listener)
         $pending = $server.BeginInvoke()
-        $wireResult = Invoke-MaiMemoDiagnosticGet "http://127.0.0.1:$port/open/api/v1/memo/notepads?limit=10&offset=0" $credential
+        $wireResult = Invoke-MaiMemoDiagnosticGet "http://127.0.0.1:$port$($wireCase.Path)" $wireCase.Credential -RawAuthorization:$wireCase.Raw
         $wireRequest = ($server.EndInvoke($pending)) -join ''
         Assert-Diagnostic ($wireResult.Status -eq 200) 'Loopback HTTP request failed'
-        Assert-Diagnostic ($wireRequest.StartsWith('GET /open/api/v1/memo/notepads?limit=10&offset=0 HTTP/1.1')) 'Incorrect wire method or integer query encoding'
-        Assert-Diagnostic ($wireRequest.Contains("Authorization: Bearer $credential")) 'Incorrect wire authorization scheme'
+        Assert-Diagnostic ($wireRequest.StartsWith("GET $($wireCase.Path) HTTP/1.1")) 'Incorrect wire method or query encoding'
+        Assert-Diagnostic ($wireRequest.Contains("Authorization: $($wireCase.ExpectedAuth)")) 'Incorrect wire authorization scheme'
         Assert-Diagnostic ($wireRequest.Contains('Accept: application/json')) 'Incorrect Accept header'
         Assert-Diagnostic ($wireRequest -notmatch '(?im)^Cookie:|^Content-Length: [1-9]') 'Unexpected cookie or request body'
         $testCount++
     }
     finally { $listener.Stop(); $server.Dispose() }
+    }
     Write-Host "Read-only diagnostic tests passed: $testCount cases (mock responses and local loopback only)."
 }
 finally { [IO.File]::Delete($workflowFile) }
