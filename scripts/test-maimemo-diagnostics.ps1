@@ -29,7 +29,7 @@ function Test-Case {
     $request = {
         param($url, $tokenValue)
         if ($tokenValue -cne $Token) { throw 'Credential was changed' }
-        if ($url -cnotmatch '^https://open\.maimemo\.com/open/api/v1/memo/notepads(?:\?limit=100&offset=\d+|/np-private-test-target)$') { throw 'Unexpected request URL' }
+        if ($url -cnotmatch '^https://open\.maimemo\.com/open/api/v1/memo/notepads(?:\?limit=10&offset=\d+|/np-private-test-target)$') { throw 'Unexpected request URL' }
         $state.Calls.Add($url)
         if ($state.Responses.Count -eq 0) { throw 'Unexpected additional request' }
         $response = $state.Responses.Dequeue()
@@ -50,7 +50,7 @@ function Test-Case {
     }
     for ($index = 0; $index -lt $state.Calls.Count; $index++) {
         if ($state.Calls[$index].Contains('?')) {
-            Assert-Diagnostic ($state.Calls[$index].EndsWith("offset=$($index * 100)")) 'Pagination did not advance'
+            Assert-Diagnostic ($state.Calls[$index].EndsWith("offset=$($index * 10)")) 'Pagination did not advance'
         }
     }
     $script:testCount++
@@ -77,7 +77,7 @@ try {
     Test-Case @($listed, (New-TestResponse -Payload @{ notepad = @{ id = 'np-other' } })) 'matched_detail_unknown' 2
     Test-Case @($listed, [InvalidOperationException]::new($credential)) 'matched_detail_unknown' 2
     Test-Case @() 'unknown' 0 -Token '' -ExpectedCode 'configuration_unavailable'
-    $fullPage = New-TestResponse -Payload @{ data = @{ notepads = @(0..99 | ForEach-Object { @{ id = "np-other-$_" } }) } }
+    $fullPage = New-TestResponse -Payload @{ data = @{ notepads = @(0..9 | ForEach-Object { @{ id = "np-other-$_" } }) } }
     Test-Case @($fullPage, $listed, $detail) 'matched_detail_ok' 3 0
     Test-Case @($fullPage, $empty) 'not_found_for_current_token' 2
     Test-Case @(1..10 | ForEach-Object { $fullPage }) 'unknown_not_exhausted' 10 -ExpectedCode 'page_limit_reached'
@@ -97,6 +97,43 @@ try {
     $workflow = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../.github/workflows/maimemo-diagnostics.yml'))
     Assert-Diagnostic ($workflow.Contains('workflow_dispatch:') -and !$workflow.Contains('Run Sync') -and !$workflow.Contains('dotnet run')) 'Diagnostic workflow can invoke sync'
     Assert-Diagnostic ($workflow.Contains('${{ secrets.MAIMEMO_TOKEN }}')) 'Existing Secret not used'
-    Write-Host "Read-only diagnostic tests passed: $testCount cases (no network requests)."
+
+    # 本机 TCP 服务核验真正发出的 HTTP，避免 Mock 掩盖参数/认证头格式问题。
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $server = [PowerShell]::Create()
+    try {
+        $port = $listener.LocalEndpoint.Port
+        [void]$server.AddScript({
+            param($tcpListener)
+            $client = $tcpListener.AcceptTcpClientAsync().WaitAsync([TimeSpan]::FromSeconds(10)).GetAwaiter().GetResult()
+            try {
+                $stream = $client.GetStream()
+                $stream.ReadTimeout = 10000
+                $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
+                try {
+                    $lines = [Collections.Generic.List[string]]::new()
+                    do { $line = $reader.ReadLine(); if ($line) { $lines.Add($line) } } while ($line)
+                    $body = '{"success":true,"data":{"notepads":[]}}'
+                    $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n$body")
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    return $lines -join "`n"
+                }
+                finally { $reader.Dispose() }
+            }
+            finally { $client.Dispose() }
+        }).AddArgument($listener)
+        $pending = $server.BeginInvoke()
+        $wireResult = Invoke-MaiMemoDiagnosticGet "http://127.0.0.1:$port/open/api/v1/memo/notepads?limit=10&offset=0" $credential
+        $wireRequest = ($server.EndInvoke($pending)) -join ''
+        Assert-Diagnostic ($wireResult.Status -eq 200) 'Loopback HTTP request failed'
+        Assert-Diagnostic ($wireRequest.StartsWith('GET /open/api/v1/memo/notepads?limit=10&offset=0 HTTP/1.1')) 'Incorrect wire method or integer query encoding'
+        Assert-Diagnostic ($wireRequest.Contains("Authorization: Bearer $credential")) 'Incorrect wire authorization scheme'
+        Assert-Diagnostic ($wireRequest.Contains('Accept: application/json')) 'Incorrect Accept header'
+        Assert-Diagnostic ($wireRequest -notmatch '(?im)^Cookie:|^Content-Length: [1-9]') 'Unexpected cookie or request body'
+        $testCount++
+    }
+    finally { $listener.Stop(); $server.Dispose() }
+    Write-Host "Read-only diagnostic tests passed: $testCount cases (mock responses and local loopback only)."
 }
 finally { [IO.File]::Delete($workflowFile) }

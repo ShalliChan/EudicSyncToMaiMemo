@@ -55,9 +55,9 @@ public class MaiMemoOpenApiServiceTests
     {
         using var cancellation = new CancellationTokenSource();
         var http = new Mock<IHttpHelper>(MockBehavior.Strict);
-        var firstPage = Enumerable.Range(0, 100)
+        var firstPage = Enumerable.Range(0, 10)
             .Select(index => new { id = $"np-other-{index}", title = $"Other {index}" }).ToArray();
-        string[] listUrls = [$"{NotepadsUrl}?limit=100&offset=0", $"{NotepadsUrl}?limit=100&offset=100"];
+        string[] listUrls = [$"{NotepadsUrl}?limit=10&offset=0", $"{NotepadsUrl}?limit=10&offset=10"];
         http.Setup(h => h.GetAsync(listUrls[0], It.Is<Dictionary<string, string>?>(headers => HasAuth(headers)), cancellation.Token))
             .ReturnsAsync(JsonConvert.SerializeObject(new { success = true, data = new { notepads = firstPage } }));
         http.Setup(h => h.GetAsync(listUrls[1], It.Is<Dictionary<string, string>?>(headers => HasAuth(headers)), cancellation.Token))

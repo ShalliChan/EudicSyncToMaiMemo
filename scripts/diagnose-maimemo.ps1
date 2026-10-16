@@ -75,9 +75,12 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
     }
 
     $baseUrl = 'https://open.maimemo.com/open/api/v1/memo/notepads'
+    # YAML 支持整数 limit/offset；官方演示输入范围为 1..10，CLI 默认值也是 10。
+    $pageSize = 10
     # 分页不重试；最多 10 页。达到上限不能判定 ID 不存在。
     for ($page = 0; $page -lt 10; $page++) {
-        try { $result = & $Request "${baseUrl}?limit=100&offset=$($page * 100)" $Token }
+        $offset = ($page * $pageSize).ToString([Globalization.CultureInfo]::InvariantCulture)
+        try { $result = & $Request "${baseUrl}?limit=$pageSize&offset=$offset" $Token }
         catch {
             & $WriteLog 'http_status=0 error_code=transport_error target_match=unknown'
             return 1
@@ -134,7 +137,7 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
             & $WriteLog "http_status=$detailStatus error_code=none target_match=matched_detail_ok"
             return 0
         }
-        if ($items.Count -lt 100) {
+        if ($items.Count -lt $pageSize) {
             & $WriteLog "http_status=$status error_code=none target_match=not_found_for_current_token"
             return 1
         }

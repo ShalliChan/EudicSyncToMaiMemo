@@ -221,7 +221,9 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 | `unknown_not_exhausted` | 达到 10 页的诊断上限，不能认定 ID 不存在。 |
 | `unknown` / `matched_detail_unknown` | 传输、响应结构或其他错误，证据不足；参考状态码和安全错误码。 |
 
-诊断不重试、不尝试其他 ID、路径或认证方案。列表每页 100 项、最多 10 页，匹配后停止分页；只有匹配时才额外 GET 一次详情。所有响应只在内存处理。可本地运行无网络测试：`pwsh -File ./scripts/test-maimemo-diagnostics.ps1`。
+诊断不重试、不尝试其他 ID、路径或认证方案。列表每页 10 项、最多 10 页，匹配后停止分页；只有匹配时才额外 GET 一次详情。所有响应只在内存处理。可本地运行 Mock 和本机回环测试：`pwsh -File ./scripts/test-maimemo-diagnostics.ps1`，不会请求墨墨。
+
+2026-10-16 参数核对：官方 YAML 明确支持整数查询参数 `limit`、`offset`，示例分别为 10 和 0，但未标注最大值；[官方演示](https://www.maimemo.com/pages/openapi-demo/index.html)的数量输入范围为 1–10，[官方 CLI](https://github.com/maimemo/memo-api-cli/blob/main/src/commands/notepad.ts)也默认使用 `limit=10&offset=0`。诊断和主程序均改用 10，后续偏移为 10、20 等，保留参数、认证和同步算法。原先的 100 超出官方演示范围，可能解释 `common_invalid_param`，仍需后续只读诊断确认；不能据此认定详情请求的 `common_invalid_res_id` 已解决。
 
 HTTP 非成功响应会记录请求方法、脱敏 URL、数字状态码及服务器错误正文；异常消息也只包含脱敏信息。请求头和请求体不输出，URL 查询值与凭证会隐藏，JSON 只保留错误诊断字段，正文最多保留 4096 字符。不会自动重试。
 

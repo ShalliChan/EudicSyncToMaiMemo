@@ -20,7 +20,8 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
     {
         // 官方 api_bundle.yaml：生产 server /open + 云词本路径 /api/v1/memo/notepads。
         private const string ApiBaseUrl = "https://open.maimemo.com/open/api/v1/memo/";
-        private const int NotepadListPageSize = 100;
+        // 与官方演示的 1..10 范围和官方 CLI 的默认值一致。
+        private const int NotepadListPageSize = 10;
 
         /// <inheritdoc />
         public async Task SyncToMaimemoNotepad(
