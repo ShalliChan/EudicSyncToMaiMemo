@@ -1,3 +1,4 @@
+#nullable enable
 namespace EudicSyncToMaiMemo.Services.Helpers
 {
     /// <summary>
@@ -6,6 +7,56 @@ namespace EudicSyncToMaiMemo.Services.Helpers
     public static class NotepadWordMergeHelper
     {
         private static readonly string[] LineSeparators = ["\r\n", "\n"];
+
+        public sealed class TitleCandidate(string? title, string reason)
+        {
+            public string? Title { get; } = title;
+            public string Reason { get; } = reason;
+        }
+
+        /// <summary>提取有明确边界的标题；歧义记录不猜测，单条格式异常不影响其他词条。</summary>
+        public static TitleCandidate ExtractTitle(string? word)
+        {
+            try
+            {
+                var lines = System.Text.RegularExpressions.Regex.Split(word ?? "", @"\r\n|\n|\r");
+                string first = lines[0].Trim();
+                bool hasNotes = lines.Skip(1).Any(line => !string.IsNullOrWhiteSpace(line));
+                var heading = Match(first, @"^#{1,6} (?<title>.+)$");
+                string title = heading.Success ? heading.Groups["title"].Value.Trim() : first;
+                var definition = Match(title, @"^(?<title>[A-Za-z0-9][A-Za-z0-9 .'\u2019\u2010\u2011-]*?)(?:\s*[:：=]\s*(?:[\u3400-\u9FFF]|(?:meaning|definition)\s*:)|\s+(?:释义|词义|含义|意思|解释)\s*[:：]|\s+是(?:一个|一种)[\u3400-\u9FFF])");
+                if (definition.Success) title = definition.Groups["title"].Value.Trim();
+                const string token = @"[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*(?:['\u2019\u2010\u2011-][\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*(?:\.[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*\.?";
+                bool lexical = Match(title, $@"^{token}(?: +{token})*$").Success
+                    && Match(title, @"\p{L}").Success && !Match(title, @"[\u3400-\u9FFF]").Success;
+                if (title.Contains(' ') && title.EndsWith('.') && !Match(title, @"(?:^| )(?:\p{L}\.){2,}$").Success)
+                    lexical = false;
+                if (!lexical || Match(title, @"^(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)$").Success)
+                    return new(null, "unsupported_title");
+                bool explicitNotes = Match(string.Join('\n', lines.Skip(1)).TrimStart(),
+                    @"^(?:#{1,6} |(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)[:：])").Success;
+                if (hasNotes && !heading.Success && !explicitNotes && !definition.Success)
+                    return new(null, "ambiguous_multiline");
+                return new(title, hasNotes || heading.Success || definition.Success ? "notes_extracted" : "plain");
+            }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                return new(null, "unsupported_title");
+            }
+        }
+
+        private static System.Text.RegularExpressions.Match Match(string text, string pattern) =>
+            System.Text.RegularExpressions.Regex.Match(text, pattern,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(250));
+
+        /// <summary>保留完整正文、空行和章节，只在末尾追加新标题。</summary>
+        public static string AppendNewTitles(string content, IReadOnlyList<string> newTitles)
+        {
+            if (newTitles.Count == 0) return content;
+            string separator = content.Length > 0 && !content.EndsWith('\n') ? "\n" : "";
+            return content + separator + JoinContentLines(newTitles);
+        }
 
         /// <summary>
         /// 去除文本中的控制字符，保留常用排版字符 Tab、CR 和 LF。

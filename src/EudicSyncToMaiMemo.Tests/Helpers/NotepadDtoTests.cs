@@ -86,6 +86,7 @@ namespace EudicSyncToMaiMemo.Tests.Helpers
         {
             var request = new NotepadUpdateRequestDto
             {
+                Id = "np-test",
                 Notepad = new NotepadUpdateDto
                 {
                     Status = "PUBLISHED",
@@ -100,7 +101,8 @@ namespace EudicSyncToMaiMemo.Tests.Helpers
 
             Assert.Contains("\"status\"", json);
             Assert.Contains("\"content\"", json);
-            Assert.DoesNotContain("\"id\"", json);
+            Assert.Contains("\"id\":\"np-test\"", json);
+            Assert.DoesNotContain("\"id\"", Newtonsoft.Json.Linq.JObject.Parse(json)["notepad"]!.ToString());
             Assert.DoesNotContain("\"list\"", json);
             Assert.DoesNotContain("\"created_time\"", json);
         }

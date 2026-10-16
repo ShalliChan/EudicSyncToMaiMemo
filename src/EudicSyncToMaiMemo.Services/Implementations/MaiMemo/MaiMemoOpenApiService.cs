@@ -39,15 +39,30 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
                 notepad.Content, out int existingRemoved);
             var cleanedWords = new List<string>(eudicWords.Count);
             int incomingRemoved = 0;
+            int unsupported = 0, ambiguous = 0;
+            var skippedReasons = new Dictionary<string, int>();
             foreach (string word in eudicWords)
             {
-                string cleaned = NotepadWordMergeHelper.RemoveInvalidControlCharacters(word, out int removed);
+                string cleaned = NotepadWordMergeHelper.RemoveInvalidControlCharacters(word ?? "", out int removed);
                 incomingRemoved += removed;
-                if (!string.IsNullOrWhiteSpace(cleaned))
+                var candidate = NotepadWordMergeHelper.ExtractTitle(cleaned);
+                if (candidate.Title != null) cleanedWords.Add(candidate.Title);
+                else
                 {
-                    cleanedWords.Add(cleaned);
+                    if (candidate.Reason == "ambiguous_multiline") ambiguous++;
+                    else unsupported++;
+                    string first = cleaned.Split(['\r', '\n'])[0];
+                    string reason = candidate.Reason == "ambiguous_multiline" ? candidate.Reason
+                        : first.IndexOfAny(['(', ')', '（', '）']) >= 0 ? "annotation_or_parentheses"
+                        : first.IndexOfAny(['/', ',', '，', ';', '；']) >= 0 ? "multiple_title_separators"
+                        : "unsupported_title";
+                    skippedReasons[reason] = skippedReasons.GetValueOrDefault(reason) + 1;
                 }
             }
+            logger.LogInformation("欧路标题提取：扫描 {Scanned}，可用 {Accepted}，跳过 {Skipped}；unsupported_title={Unsupported}，ambiguous_multiline={Ambiguous}",
+                eudicWords.Count, cleanedWords.Count, unsupported + ambiguous, unsupported, ambiguous);
+            foreach (var skipped in skippedReasons)
+                logger.LogWarning("欧路词条跳过：reason={Reason} count={Count}", skipped.Key, skipped.Value);
 
             if (incomingRemoved > 0 || existingRemoved > 0)
             {
@@ -57,11 +72,11 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             }
 
             var existingLines = NotepadWordMergeHelper.SplitContentLines(existingContent);
-            var (newWords, combinedLines) = NotepadWordMergeHelper.Merge(existingLines, cleanedWords);
+            var (newWords, _) = NotepadWordMergeHelper.Merge(existingLines, cleanedWords);
 
             if (newWords.Count > 0)
             {
-                notepad.Content = NotepadWordMergeHelper.JoinContentLines(combinedLines);
+                notepad.Content = NotepadWordMergeHelper.AppendNewTitles(existingContent, newWords);
                 await SaveNotepadAsync(resolvedNotepadId, notepad, cancellationToken);
             }
 
@@ -136,7 +151,7 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             if (response?.Data?.Notepad == null)
             {
                 throw new InvalidOperationException(
-                    $"获取墨墨云词库失败，响应解析为空。请确认 DefaultNotepadId 为 Open API 的 np- ID。原始响应：{responseJson}");
+                    "获取墨墨云词库失败，响应解析为空。请确认 DefaultNotepadId 为 Open API 的 np- ID。");
             }
 
             return response.Data.Notepad;
@@ -150,6 +165,7 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             string url = BuildNotepadUrl(notepadId);
             var request = new NotepadUpdateRequestDto
             {
+                Id = notepadId,
                 Notepad = new NotepadUpdateDto
                 {
                     Status = notepad.Status,
@@ -165,7 +181,7 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             var response = JsonHelper.JsonToObj<EnvelopeDto<NotepadPayloadDto>>(responseJson);
             if (response?.Data?.Notepad == null)
             {
-                throw new InvalidOperationException($"保存墨墨云词库失败：{responseJson}");
+                throw new InvalidOperationException("保存墨墨云词库失败：响应缺少 data.notepad。");
             }
         }
 
@@ -196,7 +212,7 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             if (words.Count > 0)
             {
                 string content = string.Join(", ", words);
-                logger.LogInformation("新增单词数量 {Total} 条，内容：{Content}", words.Count, content);
+                logger.LogInformation("新增单词数量 {Total} 条", words.Count);
                 await notificationService.SendNotification(content, cancellationToken);
             }
             else

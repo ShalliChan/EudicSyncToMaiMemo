@@ -7,6 +7,9 @@ namespace EudicSyncToMaiMemo.Models.DTOs.MaiMemo.OpenApi
     /// </summary>
     public sealed class NotepadUpdateRequestDto
     {
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
         /// <summary>
         /// 待提交的更新字段
         /// </summary>

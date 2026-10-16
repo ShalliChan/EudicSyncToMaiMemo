@@ -40,6 +40,7 @@ public class MaiMemoOpenApiServiceTests
         await CreateService(http.Object, options).SyncToMaimemoNotepad(id, ["banana", "pear"], cancellation.Token);
 
         var update = JObject.Parse(Assert.IsType<string>(updateJson));
+        Assert.Equal(id, update["id"]!.Value<string>());
         var notepad = Assert.IsType<JObject>(update["notepad"]);
         Assert.Equal(new[] { "apple", "banana", "pear" },
             notepad["content"]!.Value<string>()!.Split(["\r\n", "\n"], StringSplitOptions.None));
@@ -148,7 +149,8 @@ public class MaiMemoOpenApiServiceTests
 
         await service.SyncToMaimemoNotepad(id, rawWords);
 
-        Assert.Equal($"apple\napple\n# 保留章节\nkiwi\ncafé\npear\n{unicodeWord}\nbanana", sentContent);
+        Assert.Equal("apple\napple\n# 保留章节\nkiwi\ncafé\npear\nbanana", sentContent);
+        Assert.DoesNotContain(unicodeWord, sentContent!); // 混合笔记/符号不再作为英文词条追加。
         Assert.DoesNotContain(sentContent!, c => char.IsControl(c) && c is not ('\t' or '\r' or '\n'));
         Assert.DoesNotContain("音标", sentContent!);
         Assert.DoesNotContain("释义", sentContent!);
@@ -161,7 +163,7 @@ public class MaiMemoOpenApiServiceTests
 
         await service.SyncToMaimemoNotepad(id, rawWords);
 
-        Assert.Equal(new[] { $"pear, {unicodeWord}, banana", "没有新增单词" }, notifications);
+        Assert.Equal(new[] { "pear, banana", "没有新增单词" }, notifications);
         http.Verify(h => h.GetAsync(eudicUrl, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
         http.Verify(h => h.GetAsync(notepadUrl, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Exactly(2));
         http.Verify(h => h.PostAsync(notepadUrl, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
@@ -180,6 +182,43 @@ public class MaiMemoOpenApiServiceTests
             .SyncToMaimemoNotepad("np-test", ["apple", "app\u0011le", "\u0011", "\0", "\t"]);
 
         http.Verify(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
+        http.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task Sync_ExtractsTitles_PreservesCompleteNotebook_AndDoesNotRepeatUpdate()
+    {
+        const string id = "np-test";
+        const string original = "# first\r\ncarry with\r\n\r\n# 中文章节\r\n中文‘词’—naïve👩‍💻\r\n";
+        string saved = original;
+        string url = $"{NotepadsUrl}/{id}";
+        var http = new Mock<IHttpHelper>(MockBehavior.Strict);
+        http.Setup(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .ReturnsAsync(() => NotepadResponse(id, saved));
+        http.Setup(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .Callback<string, string, Dictionary<string, string>?, CancellationToken>((_, json, _, _) =>
+            {
+                var body = JObject.Parse(json);
+                Assert.Equal(id, body["id"]!.Value<string>());
+                var notepad = body["notepad"]!;
+                saved = notepad["content"]!.Value<string>()!;
+                Assert.Equal(original + "at a cost\nU.S.\nB2B", saved);
+                Assert.Equal("PUBLISHED", notepad["status"]!.Value<string>());
+                Assert.Equal("Vocabulary", notepad["title"]!.Value<string>());
+                Assert.Equal("Keep this brief", notepad["brief"]!.Value<string>());
+                Assert.Equal("original-tag", Assert.Single(notepad["tags"]!).Value<string>());
+                Assert.DoesNotContain("$1", saved);
+            })
+            .ReturnsAsync(() => NotepadResponse(id, saved));
+        List<string> words = ["at a cost 是一个常见短语：\nExample costs $1 million.", "at a cost", "U.S.", "B2B", "carry with",
+            "word (noun)", "foo/bar", null!, "Unclear phrase\nSome notes"];
+        var originalWords = words.ToArray();
+        var service = CreateService(http.Object, new MaiMemoOptions { Token = "test-token", DefaultNotepadId = id });
+        await service.SyncToMaimemoNotepad(id, words);
+        await service.SyncToMaimemoNotepad(id, words);
+        Assert.Equal(originalWords, words); // 不修改欧路源数据。
+        http.Verify(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
+        http.Verify(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Exactly(2));
         http.VerifyNoOtherCalls();
     }
 

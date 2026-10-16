@@ -216,35 +216,16 @@ function Write-MaiMemoTextAudit {
     }
 }
 
-# 仅供只读评估；正式同步尚未采用此候选规则。
+# 审计与正式同步共用同一份提取代码；这里不执行写入。
 function Get-EudicTitleCandidate {
     param([AllowEmptyString()][string]$Word)
-    $lines = [regex]::Split($Word, '\r\n|\n|\r')
-    $first = $lines[0].Trim()
-    $hasNotes = $lines.Count -gt 1 -and ![string]::IsNullOrWhiteSpace(($lines[1..($lines.Count - 1)] -join "`n"))
-    $heading = [regex]::Match($first, '^#{1,6} (?<title>.+)$')
-    $title = if ($heading.Success) { $heading.Groups['title'].Value.Trim() } else { $first }
-    $definitionBoundary = $false
-    # 只有显式释义标记或分隔符后的中文释义才作为边界；不把任意中英文相邻当边界。
-    $definition = [regex]::Match($title, '^(?<title>[A-Za-z0-9][A-Za-z0-9 .''\u2019\u2010\u2011-]*?)(?:\s*[:：=]\s*(?:[\u3400-\u9FFF]|(?:meaning|definition)\s*:)|\s+(?:释义|词义|含义|意思|解释)\s*[:：]|\s+是(?:一个|一种)[\u3400-\u9FFF])', 'IgnoreCase')
-    if ($definition.Success) { $title = $definition.Groups['title'].Value.Trim(); $definitionBoundary = $true }
-    # 只接受完整词/短语，不按空格截断，不剥除行内 Markdown、释义、金额或句子标点。
-    $token = '[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*(?:[''\u2019\u2010\u2011-][\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*(?:\.[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*\.?'
-    $lexical = $title -cmatch "^$token(?: +$token)*$" -and $title -match '\p{L}' -and $title -notmatch '[\u3400-\u9FFF]'
-    # 带句末句点的整句不因放宽缩写规则而进入候选；词内缩写及独立缩写保留原文。
-    if ($title.Contains(' ') -and $title.EndsWith('.') -and $title -cnotmatch '(?:^| )(?:\p{L}\.){2,}$') { $lexical = $false }
-    if (!$lexical -or $title -match '^(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)$') {
-        return @{ Title = $null; Reason = 'unsupported_title' }
+    if (!('EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper' -as [type])) {
+        $helperPath = Join-Path $PSScriptRoot '../src/EudicSyncToMaiMemo.Services/Helpers/NotepadWordMergeHelper.cs'
+        Add-Type -TypeDefinition ("using System; using System.Collections.Generic; using System.Linq;`n" + [IO.File]::ReadAllText($helperPath)) -ErrorAction Stop
     }
-    if ($hasNotes) {
-        $rest = ($lines[1..($lines.Count - 1)] -join "`n").TrimStart()
-        $explicitNotes = $rest -match '^(?:#{1,6} |(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)[:：])'
-        # 任意多行记录都要求明确边界，不针对单个短语添加例外。
-        if (!$heading.Success -and !$explicitNotes -and !$definitionBoundary) {
-            return @{ Title = $null; Reason = 'ambiguous_multiline' }
-        }
-    }
-    return @{ Title = $title; Reason = $(if ($hasNotes -or $heading.Success -or $definitionBoundary) { 'notes_extracted' } else { 'plain' }) }
+    $removed = 0
+    $cleaned = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::RemoveInvalidControlCharacters($Word, [ref]$removed)
+    return [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::ExtractTitle($cleaned)
 }
 
 # 仅描述已经被跳过的原始数据形态，不提取新标题或改变跳过决定。
@@ -297,7 +278,10 @@ function Write-EudicTitleAudit {
         $titles.Add($candidate.Title)
         if ($candidate.Title -ceq 'at a cost') { $counts.confirmed_at_a_cost++ }
     }
-    $existing = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($ExistingContent)
+    $existingRemoved = 0
+    $cleanedExisting = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::RemoveInvalidControlCharacters($ExistingContent, [ref]$existingRemoved)
+    $counts.existing_controls_removed = $existingRemoved
+    $existing = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($cleanedExisting)
     $merge = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::Merge($existing, $titles)
     $unique = [Collections.Generic.HashSet[string]]::new($titles, [StringComparer]::Ordinal)
     $counts.unique_titles = $unique.Count
@@ -305,9 +289,7 @@ function Write-EudicTitleAudit {
     $counts.already_present = $unique.Count - $merge.Item1.Count
     $counts.would_add = $merge.Item1.Count
     # 更新 content 必须携带完整已有正文；保留 CRLF、空行和章节，仅追加新增标题。
-    $suffix = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::JoinContentLines($merge.Item1)
-    $separator = if ($ExistingContent.Length -gt 0 -and !$ExistingContent.EndsWith("`n") -and $suffix) { "`n" } else { '' }
-    $finalContent = $ExistingContent + $separator + $suffix
+    $finalContent = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::AppendNewTitles($cleanedExisting, $merge.Item1)
     $counts.existing_lines = $existing.Count
     $counts.existing_chapters = [regex]::Matches($ExistingContent, '(?m)^#').Count
     $counts.final_chapters = [regex]::Matches($finalContent, '(?m)^#').Count

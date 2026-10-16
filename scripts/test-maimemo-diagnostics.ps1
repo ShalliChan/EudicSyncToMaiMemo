@@ -189,7 +189,7 @@ try {
         @{ Word = "# Notes`nExample."; Title = $null; Reason = 'unsupported_title' },
         @{ Word = "`napple"; Title = $null; Reason = 'unsupported_title' },
         @{ Word = ''; Title = $null; Reason = 'unsupported_title' },
-        @{ Word = "app`u{0011}le"; Title = $null; Reason = 'unsupported_title' }
+        @{ Word = "app`u{0011}le"; Title = 'apple'; Reason = 'plain' }
     )) {
         $candidate = Get-EudicTitleCandidate $case.Word
         Assert-Diagnostic ($candidate.Title -ceq $case.Title -and $candidate.Reason -ceq $case.Reason) 'Unexpected title extraction'
