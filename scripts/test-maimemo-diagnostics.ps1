@@ -97,6 +97,15 @@ function Test-ContentAudit {
     $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit
     Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
+    if ($TitleAudit -and $ExpectedExit -eq 0) {
+        $skippedLine = @($state.Logs | Where-Object { $_ -match '^source=title_extraction anomaly=skipped ' })
+        $skipTotal = [int]([regex]::Match($skippedLine[0], 'count=(\d+)$').Groups[1].Value)
+        $classified = 0
+        foreach ($line in $state.Logs) {
+            if ($line.StartsWith('source=title_skipped ')) { $classified += [int]([regex]::Match($line, 'count=(\d+)$').Groups[1].Value) }
+        }
+        Assert-Diagnostic ($classified -eq $skipTotal) 'Skip categories must partition the skipped entries'
+    }
     foreach ($line in $ExpectedLines) { Assert-Diagnostic ($state.Logs.Contains($line)) "Missing safe audit metric: $line" }
     foreach ($line in $state.Logs) {
         if ($line.StartsWith('source=eudic_word_raw anomaly=literal_dollar_one_entry word_json=')) {
@@ -117,6 +126,32 @@ function Test-ContentAudit {
 }
 
 try {
+    foreach ($case in @(
+        @{ Word = ''; Category = 'empty' },
+        @{ Word = "`nword"; Category = 'missing_first_line_title' },
+        @{ Word = "word`nother word"; Category = 'ambiguous_multiline'; Reason = 'ambiguous_multiline' },
+        @{ Word = "## Notes`nExample."; Category = 'note_heading' },
+        @{ Word = '笔记：说明'; Category = 'note_heading' },
+        @{ Word = 'at a cost 是一个短语'; Category = 'same_line_definition_candidate'; Proposal = 'definition_boundary_candidate' },
+        @{ Word = 'carry with: explanation'; Category = 'same_line_definition_candidate'; Proposal = 'definition_boundary_candidate' },
+        @{ Word = '**at a cost**'; Category = 'markdown_or_markup'; Proposal = 'standalone_markdown_candidate' },
+        @{ Word = '__carry with__'; Category = 'markdown_or_markup'; Proposal = 'standalone_markdown_candidate' },
+        @{ Word = '`apple`'; Category = 'markdown_or_markup'; Proposal = 'standalone_markdown_candidate' },
+        @{ Word = '> quoted sentence'; Category = 'markdown_or_markup' },
+        @{ Word = 'word (noun)'; Category = 'annotation_or_parentheses' },
+        @{ Word = 'word/another'; Category = 'multiple_title_separators' },
+        @{ Word = "app`u{200B}le"; Category = 'invisible_or_control' },
+        @{ Word = "at`u{00A0}a cost"; Category = 'invisible_or_control' },
+        @{ Word = 'U.S.'; Category = 'punctuated_or_alphanumeric_candidate'; Proposal = 'possible_normal_term' },
+        @{ Word = 'B2B'; Category = 'punctuated_or_alphanumeric_candidate'; Proposal = 'possible_normal_term' },
+        @{ Word = 'word?'; Category = 'symbols_numbers_or_punctuation' },
+        @{ Word = '这是一段笔记'; Category = 'non_english_note_candidate' }
+    )) {
+        $classification = Get-EudicSkippedTitleClassification $case.Word $case.Reason
+        $expectedProposal = if ($case.Proposal) { $case.Proposal } else { 'none' }
+        Assert-Diagnostic ($classification.Category -ceq $case.Category -and $classification.Proposal -ceq $expectedProposal) 'Unexpected skipped classification'
+        $testCount++
+    }
     foreach ($case in @(
         @{ Word = 'apple'; Title = 'apple'; Reason = 'plain' },
         @{ Word = 'at a cost'; Title = 'at a cost'; Reason = 'plain' },
@@ -205,8 +240,27 @@ try {
         'source=title_extraction anomaly=duplicate_titles codepoints=none count=1',
         'source=title_extraction anomaly=already_present codepoints=none count=1',
         'source=title_extraction anomaly=would_add codepoints=none count=2',
+        'source=title_skipped anomaly=ambiguous_multiline codepoints=none count=1',
+        'source=title_skipped anomaly=markdown_or_markup codepoints=none count=1',
+        'source=title_rule_review anomaly=standalone_markdown_candidate codepoints=none count=1',
         'source=extracted_titles anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0'
     ) -TitleAudit -LocateLiteralDollarOne
+    $skippedWords = New-TestResponse -Payload @{ data = @(
+        @{ word = 'at a cost：是一个短语' }, @{ word = '**carry with**' }, @{ word = 'U.S.' },
+        @{ word = 'B2B' }, @{ word = 'Notes: private details' }, @{ word = 'word/another' },
+        @{ word = 'word (noun)' }, @{ word = "app`u{200B}le" }, @{ word = '' },
+        @{ word = "word`nother word" }
+    ) }
+    Test-ContentAudit @($plainNotepad, $skippedWords) @(
+        'source=title_extraction anomaly=scanned codepoints=none count=10',
+        'source=title_extraction anomaly=syncable codepoints=none count=0',
+        'source=title_extraction anomaly=skipped codepoints=none count=10',
+        'source=title_skipped anomaly=same_line_definition_candidate codepoints=none count=1',
+        'source=title_skipped anomaly=punctuated_or_alphanumeric_candidate codepoints=none count=2',
+        'source=title_rule_review anomaly=possible_normal_term codepoints=none count=2',
+        'source=title_rule_review anomaly=definition_boundary_candidate codepoints=none count=1',
+        'source=title_extraction anomaly=would_add codepoints=none count=0'
+    ) -TitleAudit
     $locateWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'cost $1'; exp = $privateContent },
         @{ word = 'normal-private-word'; context_line = 'ignored$1' },

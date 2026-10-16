@@ -212,6 +212,8 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 查看 `source=title_extraction`：`scanned` 为完整扫描条数；`syncable + skipped = scanned`；`plain`、`notes_extracted` 为可用候选分类；`ambiguous_multiline`、`unsupported_title` 为待跳过原因。`unique_titles`、`duplicate_titles` 区分词条与唯一标题，`already_present`、`would_add` 按原有逐行、区分大小写的合并规则统计。`confirmed_at_a_cost` 统计保留该短语的条数。`source=extracted_titles` 检查候选标题中是否还存在 `$1` 等字符。不会因跳过而删除墨墨已有行；未做 POST，数量不代表服务器已接受。必须先核对本次实际统计，再决定正式同步改动。
 
+待跳过词条现额外输出 `source=title_skipped` 的互斥结构分类，各类数量之和等于 `skipped`：`same_line_definition_candidate`（疑似同一行释义）、`markdown_or_markup`、`note_heading`、`ambiguous_multiline`、`invisible_or_control`、`annotation_or_parentheses`、`multiple_title_separators`、`punctuated_or_alphanumeric_candidate`（可能是正常缩写/含数字词形）、`symbols_numbers_or_punctuation`，以及空值、首行缺失、非英文笔记候选和未分类项。`source=title_rule_review` 统计可能值得评估的通用规则及其命中数量：`definition_boundary_candidate`、`standalone_markdown_candidate`、`possible_normal_term`。这些是结构信号，不证明可可靠提取，也不证明其他分类都是异常词；本次未改变任何提取或正式同步规则，不输出被跳过词条的正文。仅凭聚合数量不能验证语义，未分类项保持待复核。
+
 关闭标题审计后，原内容审计会在内存中调用生产清理、去重、合并函数，重建原同步逻辑拟提交的 content：
 
 统计日志包含 `source`、`anomaly`、`codepoints`、`count`。对照 `eudic_word_raw`、`notepad_content_raw`、两处 `cleaned` 来源和 `final_content` 的 `literal_dollar_one` 数量，可区分输入已有 `$1`、清理后出现 `$1` 和最终正文不含 `$1`。音标、释义、例句标为 `ignored`，不参与合并；标题、简介、标签标为 `unchanged`，保持生产程序原有行为。审计不会修改原始或拟提交内容来迎合检查。`words_added=0` 时生产程序原本不会 POST。

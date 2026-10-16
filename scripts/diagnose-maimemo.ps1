@@ -240,15 +240,52 @@ function Get-EudicTitleCandidate {
     return @{ Title = $title; Reason = $(if ($hasNotes -or $heading.Success) { 'notes_extracted' } else { 'plain' }) }
 }
 
+# 仅描述已经被跳过的原始数据形态，不提取新标题或改变跳过决定。
+function Get-EudicSkippedTitleClassification {
+    param([AllowEmptyString()][string]$Word, [string]$Reason)
+    $first = ([regex]::Split($Word, '\r\n|\n|\r'))[0].Trim()
+    $english = '[A-Za-z]+(?:[''\u2019-][A-Za-z]+)*(?: +[A-Za-z]+(?:[''\u2019-][A-Za-z]+)*)*'
+    $category = 'other_unsupported'
+    $proposal = 'none'
+    if ([string]::IsNullOrWhiteSpace($Word)) { $category = 'empty' }
+    elseif (!$first) { $category = 'missing_first_line_title' }
+    elseif ($Reason -eq 'ambiguous_multiline') { $category = 'ambiguous_multiline' }
+    elseif ($first -match '^(?:#{1,6}\s+)?(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)(?:[:：\s]|$)') { $category = 'note_heading' }
+    elseif ($first -cmatch "^$english(?: +[\u3400-\u9FFF]|\s*[:：=])") {
+        $category = 'same_line_definition_candidate'; $proposal = 'definition_boundary_candidate'
+    }
+    elseif ($first -match '^(?:#{1,6}\s|\*|_|`|>|-\s|\[)|[\[\]`*]') {
+        $category = 'markdown_or_markup'
+        if ($first -cmatch ('^(?:\*\*{0}\*\*|__{0}__|`{0}`)$' -f $english)) { $proposal = 'standalone_markdown_candidate' }
+    }
+    elseif ($first -match '[\p{Cc}\p{Cf}]|[^\S ]') { $category = 'invisible_or_control' }
+    elseif ($first -match '[()（）\[\]]') { $category = 'annotation_or_parentheses' }
+    elseif ($first -match '[/,，;；]') { $category = 'multiple_title_separators' }
+    elseif ($first -cmatch '^[A-Za-z][A-Za-z0-9 .''\u2019-]*$') {
+        $category = 'punctuated_or_alphanumeric_candidate'; $proposal = 'possible_normal_term'
+    }
+    elseif ($first -match '[\p{S}\p{N}\p{P}]') { $category = 'symbols_numbers_or_punctuation' }
+    elseif ($first -match '^[\u3400-\u9FFF]') { $category = 'non_english_note_candidate' }
+    return @{ Category = $category; Proposal = $proposal }
+}
+
 function Write-EudicTitleAudit {
     param([string[]]$Words, [string]$ExistingContent, [scriptblock]$WriteLog)
     $titles = [Collections.Generic.List[string]]::new()
     $counts = @{ scanned = $Words.Count; syncable = 0; skipped = 0; plain = 0; notes_extracted = 0;
         ambiguous_multiline = 0; unsupported_title = 0; confirmed_at_a_cost = 0 }
+    $skipCategories = @{}
+    $proposals = @{}
     foreach ($word in $Words) {
         $candidate = Get-EudicTitleCandidate $word
         $counts[$candidate.Reason]++
-        if ($null -eq $candidate.Title) { $counts.skipped++; continue }
+        if ($null -eq $candidate.Title) {
+            $counts.skipped++
+            $classification = Get-EudicSkippedTitleClassification $word $candidate.Reason
+            $skipCategories[$classification.Category]++
+            if ($classification.Proposal -ne 'none') { $proposals[$classification.Proposal]++ }
+            continue
+        }
         $counts.syncable++
         $titles.Add($candidate.Title)
         if ($candidate.Title -ceq 'at a cost') { $counts.confirmed_at_a_cost++ }
@@ -262,6 +299,13 @@ function Write-EudicTitleAudit {
     $counts.would_add = $merge.Item1.Count
     foreach ($key in ($counts.Keys | Sort-Object)) {
         & $WriteLog "source=title_extraction anomaly=$key codepoints=none count=$($counts[$key])"
+    }
+    # 主分类互斥，数量之和必须等于 skipped；候选规则统计不代表已确认可恢复。
+    foreach ($key in ($skipCategories.Keys | Sort-Object)) {
+        & $WriteLog "source=title_skipped anomaly=$key codepoints=none count=$($skipCategories[$key])"
+    }
+    foreach ($key in ($proposals.Keys | Sort-Object)) {
+        & $WriteLog "source=title_rule_review anomaly=$key codepoints=none count=$($proposals[$key])"
     }
     # 保持已有词本逐行不变；只在内存中检查候选新增标题。
     Write-MaiMemoTextAudit 'extracted_titles' $titles.ToArray() $WriteLog
