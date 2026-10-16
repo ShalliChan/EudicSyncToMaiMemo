@@ -206,6 +206,12 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 ### 临时只读墨墨诊断
 
+当前额外开启 `MAIMEMO_SOURCE_AUDIT=true`，优先执行来源对照（仍仅 GET）。`source_audit` 汇总原始记录、原始完整文本重复数、当前有效唯一标题、标题重复、笔记提取标题、词本正文行和 API `list` 解析词条；`default_book_configured` 和 `target_title_matches` 分别核对默认源词本和目标名称，不输出 ID。`literal_valid_unique_titles` 是无需解析笔记即可取得的有效唯一原始标题数，供评估最简规则；`derived_only_unique_titles` 是仅依赖笔记提取的标题数。当前正式规则保持不变，是否改为仅接受完整原始标题须另行确认。
+
+六组 `focus_*` 对应用户指定的 do with、do with sth.、boil down、boil down to、boil down to sth.、down to。`raw_exact`/`raw_trimmed_exact` 为完整原始记录匹配，`extracted_title_exact` 为实际候选标题匹配，`notes_body_mentions`/`raw_embedded_not_title` 仅为笔记或嵌入命中，不能当独立收藏；`content_line_exact` 是提交正文独立行，`parsed_word_exact` 只看 `WORD`/`DRAFT_WORD` 类型，排除章节和释义字段。大小写差异另有 `raw_casefold_exact`、`title_casefold_exact`，不会因此合并原始数据。
+
+`parsed_without_content_line` 仅表示服务端解析有而正文独立行没有，不能认定是程序添加或学习卡片重复；`content_without_current_title` 也不能区分旧版本残留、手工内容或源词库后续变化。`parsed_available=0` 时不能声称解析层没有该表达。语义错误提取数量无法仅凭字符串比较证明，故 `semantic_error_count_unknown=1` 表示尚未确证，而非错误数为 1。不会清空、重建或修改任何词本。实际新统计须运行工作流取得，不能套用此前 791/781 等历史数量。
+
 进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路全部分页词条。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录词条、笔记正文、Token、完整 ID 或上下文。此前定位 `$1` 的逐条输出开关已关闭。
 
 当前启用 `MAIMEMO_TITLE_AUDIT=true`，仅通过 GET 在内存中审计，提取与追加函数已与正式 OpenAPI 同步共用。候选允许词形中的数字、句点、Unicode 字母、组合附加符、词内连字符及撇号，完整保留短语空格；纯数字、复杂分隔符和括号不自动处理。多词且以句点结尾、无法确认是缩写的内容仍保守跳过。多行记录须有 Markdown 标题或显式笔记标题；不再对 `at a cost` 使用特殊截取规则。新增的通用行内边界限于：英文标题后 `:`/`：`/`=` 加中文释义（或 `meaning:`/`definition:`），明确的 `释义：` 等标记，以及“是一个/是一种”中文说明引导。不按第一个空格截断，不把任意中英文相邻当边界，也不回传笔记。这是保守的结构检查，仍需实际数据审计，不能证明任意纯字母短语的语义。

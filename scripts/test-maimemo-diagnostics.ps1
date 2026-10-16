@@ -67,7 +67,7 @@ function Test-Case {
 
 function Test-ContentAudit {
     param([object[]]$Responses, [string[]]$ExpectedLines, [int]$ExpectedExit = 0,
-        [switch]$LocateLiteralDollarOne, [switch]$TitleAudit)
+        [switch]$LocateLiteralDollarOne, [switch]$TitleAudit, [switch]$SourceAudit)
     $expectedTarget = $target
     $expectedToken = $credential
     $state = @{
@@ -94,10 +94,10 @@ function Test-ContentAudit {
         return $response
     }.GetNewClosure()
     $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
-    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit
+    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit -SourceAudit:$SourceAudit
     Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
-    if ($TitleAudit -and $ExpectedExit -eq 0) {
+    if ($TitleAudit -and !$SourceAudit -and $ExpectedExit -eq 0) {
         $skippedLine = @($state.Logs | Where-Object { $_ -match '^source=title_extraction anomaly=skipped ' })
         $skipTotal = [int]([regex]::Match($skippedLine[0], 'count=(\d+)$').Groups[1].Value)
         $classified = 0
@@ -235,6 +235,45 @@ try {
         'source=merge anomaly=words_added codepoints=none count=1'
     )
     $plainNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "# existing`napple" } } }
+    $sourceNotepad = New-TestResponse -Payload @{ data = @{ notepad = @{
+        id = $target; content = "do with`nboil down to`nlegacy";
+        list = @(@{ type = 'WORD'; word = 'do with' }, @{ type = 'WORD'; word = 'boil down to' },
+            @{ type = 'WORD'; word = 'down to' }, @{ type = 'DRAFT_WORD'; word = 'do with sth.' },
+            @{ type = 'CHAPTER'; word = 'boil down'; chapter = $privateContent })
+    } } }
+    $sourceWords = New-TestResponse -Payload @{ data = @(
+        @{ word = 'do with' }, @{ word = 'do with' },
+        @{ word = "boil down to 释义：中文`nExample do with sth. and down to"; context_line = 'do with sth.' },
+        @{ word = 'other (note)'; exp = $privateContent }
+    ) }
+    Test-ContentAudit @($sourceNotepad, $sourceWords) @(
+        'source=source_audit anomaly=records_scanned codepoints=none count=4',
+        'source=source_audit anomaly=raw_exact_duplicates codepoints=none count=1',
+        'source=source_audit anomaly=valid_unique_titles codepoints=none count=2',
+        'source=source_audit anomaly=title_duplicates codepoints=none count=1',
+        'source=source_audit anomaly=literal_valid_unique_titles codepoints=none count=1',
+        'source=source_audit anomaly=derived_only_unique_titles codepoints=none count=1',
+        'source=source_audit anomaly=content_without_current_title codepoints=none count=1',
+        'source=source_audit anomaly=parsed_word_rows codepoints=none count=4',
+        'source=source_audit anomaly=parsed_without_content_line codepoints=none count=2',
+        'source=source_audit anomaly=semantic_error_count_unknown codepoints=none count=1',
+        'source=focus_do_with anomaly=raw_exact codepoints=none count=2',
+        'source=focus_do_with_sth anomaly=raw_exact codepoints=none count=0',
+        'source=focus_do_with_sth anomaly=extracted_title_exact codepoints=none count=0',
+        'source=focus_do_with_sth anomaly=notes_body_mentions codepoints=none count=1',
+        'source=focus_do_with_sth anomaly=ignored_metadata_mentions codepoints=none count=1',
+        'source=focus_do_with_sth anomaly=content_line_exact codepoints=none count=0',
+        'source=focus_do_with_sth anomaly=parsed_word_exact codepoints=none count=1',
+        'source=focus_boil_down anomaly=parsed_word_exact codepoints=none count=0',
+        'source=focus_boil_down_to anomaly=extracted_title_exact codepoints=none count=1',
+        'source=focus_down_to anomaly=raw_exact codepoints=none count=0',
+        'source=focus_down_to anomaly=parsed_word_exact codepoints=none count=1'
+    ) -SourceAudit -TitleAudit -LocateLiteralDollarOne
+    Test-ContentAudit @($plainNotepad, (New-TestResponse -Payload @{ data = @() })) @(
+        'source=source_audit anomaly=records_scanned codepoints=none count=0',
+        'source=source_audit anomaly=parsed_available codepoints=none count=0',
+        'source=source_audit anomaly=content_starts_chapter codepoints=none count=1'
+    ) -SourceAudit
     $titleWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'apple' },
         @{ word = "at a cost 释义：中文`n$privateContent costs `$1 million." },

@@ -312,6 +312,83 @@ function Write-EudicTitleAudit {
     Write-MaiMemoTextAudit 'proposed_final_content' @($finalContent) $WriteLog
 }
 
+function Write-EudicSourceAudit {
+    param([string[]]$Words, $Notepad, [hashtable]$Ignored, [scriptblock]$WriteLog, [bool]$IsDefaultBook = $false)
+    $rawSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $literalTitles = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $titles = [Collections.Generic.List[string]]::new()
+    $candidates = [Collections.Generic.List[object]]::new()
+    $derived = 0
+    foreach ($word in $Words) {
+        [void]$rawSet.Add($word)
+        $candidate = Get-EudicTitleCandidate $word
+        $candidates.Add($candidate)
+        if ($null -ne $candidate.Title) {
+            $titles.Add($candidate.Title)
+            if ($candidate.Reason -eq 'notes_extracted') { $derived++ }
+            if ($word.Trim() -ceq $candidate.Title) { [void]$literalTitles.Add($candidate.Title) }
+        }
+    }
+    $titleSet = [Collections.Generic.HashSet[string]]::new($titles, [StringComparer]::Ordinal)
+    $contentLines = @([EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($Notepad.content) | Where-Object { !($_.StartsWith('#')) -and $_ -cne '//' })
+    $contentSet = [Collections.Generic.HashSet[string]]::new([string[]]$contentLines, [StringComparer]::Ordinal)
+    $parsed = [Collections.Generic.List[string]]::new()
+    $parsedAvailable = $Notepad.list -is [array]
+    $unknownItems = 0
+    if ($parsedAvailable) {
+        foreach ($item in $Notepad.list) {
+            if ($item.type -cin @('WORD', 'DRAFT_WORD') -and $item.word -is [string]) { $parsed.Add($item.word) }
+            elseif ($item.type -cne 'CHAPTER') { $unknownItems++ }
+        }
+    }
+    $parsedSet = [Collections.Generic.HashSet[string]]::new($parsed, [StringComparer]::Ordinal)
+    $summary = @{
+        records_scanned = $Words.Count; raw_unique = $rawSet.Count; raw_exact_duplicates = $Words.Count - $rawSet.Count;
+        accepted_records = $titles.Count; valid_unique_titles = $titleSet.Count; title_duplicates = $titles.Count - $titleSet.Count;
+        rejected_records = $Words.Count - $titles.Count; titles_from_notes = $derived;
+        literal_valid_unique_titles = $literalTitles.Count;
+        derived_only_unique_titles = @($titleSet | Where-Object { !$literalTitles.Contains($_) }).Count;
+        content_rows = $contentLines.Count; content_unique = $contentSet.Count; content_duplicates = $contentLines.Count - $contentSet.Count;
+        content_without_current_title = @($contentSet | Where-Object { !$titleSet.Contains($_) }).Count;
+        titles_missing_from_content = @($titleSet | Where-Object { !$contentSet.Contains($_) }).Count;
+        parsed_available = [int]$parsedAvailable; parsed_word_rows = $parsed.Count; parsed_unique_words = $parsedSet.Count;
+        parsed_unknown_items = $unknownItems;
+        parsed_without_content_line = @($parsedSet | Where-Object { !$contentSet.Contains($_) }).Count;
+        content_starts_chapter = [int]$Notepad.content.StartsWith('#'); content_starts_prototype = [int]$Notepad.content.StartsWith('//');
+        semantic_error_count_unknown = 1
+        default_book_configured = [int]$IsDefaultBook
+        target_title_matches = [int]($Notepad.title -ceq '欧路词典同步')
+    }
+    foreach ($key in ($summary.Keys | Sort-Object)) { & $WriteLog "source=source_audit anomaly=$key codepoints=none count=$($summary[$key])" }
+    # 仅针对用户指定表达输出计数，不能将子串命中当作独立收藏或同步新增的证据。
+    $focus = [ordered]@{ do_with = 'do with'; do_with_sth = 'do with sth.'; boil_down = 'boil down'; boil_down_to = 'boil down to'; boil_down_to_sth = 'boil down to sth.'; down_to = 'down to' }
+    foreach ($key in $focus.Keys) {
+        $term = $focus[$key]
+        $metrics = @{ raw_exact = 0; raw_trimmed_exact = 0; raw_casefold_exact = 0; first_line_exact = 0; extracted_title_exact = 0; title_casefold_exact = 0;
+            raw_embedded_not_title = 0; notes_body_mentions = 0; ignored_metadata_mentions = 0;
+            content_line_exact = 0; parsed_word_exact = 0 }
+        $pattern = '(?<![\p{L}\p{Nd}])' + [regex]::Escape($term) + '(?![\p{L}\p{Nd}])'
+        for ($index = 0; $index -lt $Words.Count; $index++) {
+            $word = $Words[$index]
+            $lines = [regex]::Split($word, '\r\n|\n|\r')
+            if ($word -ceq $term) { $metrics.raw_exact++ }
+            if ($word.Trim() -ceq $term) { $metrics.raw_trimmed_exact++ }
+            if ($word.Trim().Equals($term, [StringComparison]::OrdinalIgnoreCase)) { $metrics.raw_casefold_exact++ }
+            if ($null -ne $candidates[$index].Title -and $candidates[$index].Title.Equals($term, [StringComparison]::OrdinalIgnoreCase)) { $metrics.title_casefold_exact++ }
+            if ($lines[0].Trim() -ceq $term) { $metrics.first_line_exact++ }
+            if ($candidates[$index].Title -ceq $term) { $metrics.extracted_title_exact++ }
+            elseif ([regex]::IsMatch($word, $pattern)) { $metrics.raw_embedded_not_title++ }
+            if ($lines.Count -gt 1 -and [regex]::IsMatch(($lines[1..($lines.Count - 1)] -join "`n"), $pattern)) { $metrics.notes_body_mentions++ }
+        }
+        foreach ($field in @('phon', 'exp', 'context_line')) {
+            foreach ($text in $Ignored[$field]) { if ([regex]::IsMatch($text, $pattern)) { $metrics.ignored_metadata_mentions++ } }
+        }
+        $metrics.content_line_exact = @($contentLines | Where-Object { $_ -ceq $term }).Count
+        $metrics.parsed_word_exact = @($parsed | Where-Object { $_ -ceq $term }).Count
+        foreach ($metric in ($metrics.Keys | Sort-Object)) { & $WriteLog "source=focus_$key anomaly=$metric codepoints=none count=$($metrics[$metric])" }
+    }
+}
+
 function Invoke-MaiMemoContentAudit {
     param(
         [string]$Token,
@@ -319,6 +396,7 @@ function Invoke-MaiMemoContentAudit {
         [string]$EudicBookId,
         [switch]$LocateLiteralDollarOne,
         [switch]$TitleAudit,
+        [switch]$SourceAudit,
         [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
@@ -400,6 +478,10 @@ function Invoke-MaiMemoContentAudit {
         return 1
     }
 
+    if ($SourceAudit) {
+        Write-EudicSourceAudit $words.ToArray() $notepad $ignored $WriteLog -IsDefaultBook ($EudicBookId -ceq '0')
+        return 0
+    }
     if ($TitleAudit) {
         Write-EudicTitleAudit $words.ToArray() $notepad.content $WriteLog
         return 0
@@ -450,7 +532,7 @@ function Invoke-MaiMemoContentAudit {
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($env:MAIMEMO_CONTENT_AUDIT -eq 'true') {
-            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true'))
+            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true') -SourceAudit:($env:MAIMEMO_SOURCE_AUDIT -eq 'true'))
         }
         exit (Invoke-MaiMemoReadOnlyDiagnostic -Token $env:MAIMEMO_TOKEN)
     }
