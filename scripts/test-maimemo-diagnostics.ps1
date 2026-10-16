@@ -19,7 +19,8 @@ function New-TestResponse {
 
 function Test-Case {
     param([object[]]$Responses, [string]$ExpectedMatch, [int]$ExpectedRequests,
-        [int]$ExpectedExit = 1, [string]$Token = $credential, [string]$ExpectedCode = '')
+        [int]$ExpectedExit = 1, [string]$Token = $credential, [string]$ExpectedCode = '',
+        [int]$ExpectedScanned = -1, [int]$ExpectedPages = -1, [int[]]$ExpectedOffsets = @())
     $state = @{
         Responses = [Collections.Generic.Queue[object]]::new()
         Calls = [Collections.Generic.List[string]]::new()
@@ -40,17 +41,25 @@ function Test-Case {
     $result = Invoke-MaiMemoReadOnlyDiagnostic -Token $Token -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog
     Assert-Diagnostic ($result -eq $ExpectedExit) "Unexpected result for $ExpectedMatch (exit=$result; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $ExpectedRequests) "Unexpected request count for $ExpectedMatch"
-    Assert-Diagnostic ($state.Logs.Count -gt 0 -and $state.Logs[-1].EndsWith("target_match=$ExpectedMatch")) "Unexpected match result for $ExpectedMatch"
+    Assert-Diagnostic ($state.Logs.Count -gt 0 -and $state.Logs[-1] -match " target_match=$ExpectedMatch(?: |$)") "Unexpected match result for $ExpectedMatch"
     if ($ExpectedCode) { Assert-Diagnostic ($state.Logs[-1].Contains("error_code=$ExpectedCode ")) 'Unexpected error code' }
     foreach ($line in $state.Logs) {
-        Assert-Diagnostic ($line -cmatch '^http_status=\d+ error_code=[a-z0-9_,]+ target_match=[a-z_]+$') 'Unexpected log fields'
+        Assert-Diagnostic ($line -cmatch '^http_status=\d+ error_code=[a-z0-9_,]+ target_match=[a-z_]+ pages_scanned=\d+ scanned_count=\d+$') 'Unexpected log fields'
         foreach ($secret in @($credential, $target, $privateContent)) {
             Assert-Diagnostic (!$line.Contains($secret)) 'Private information leaked'
         }
     }
-    for ($index = 0; $index -lt $state.Calls.Count; $index++) {
-        if ($state.Calls[$index].Contains('?')) {
-            Assert-Diagnostic ($state.Calls[$index].EndsWith("offset=$($index * 10)")) 'Pagination did not advance'
+    if ($ExpectedScanned -ge 0) {
+        Assert-Diagnostic ($state.Logs[-1].EndsWith("scanned_count=$ExpectedScanned")) 'Incorrect scanned count'
+    }
+    if ($ExpectedPages -ge 0) {
+        Assert-Diagnostic ($state.Logs[-1].Contains("pages_scanned=$ExpectedPages ")) 'Incorrect page count'
+    }
+    if ($ExpectedOffsets.Count -gt 0) {
+        $listCalls = @($state.Calls | Where-Object { $_.Contains('?') })
+        Assert-Diagnostic ($listCalls.Count -eq $ExpectedOffsets.Count) 'Incorrect list page count'
+        for ($index = 0; $index -lt $listCalls.Count; $index++) {
+            Assert-Diagnostic ($listCalls[$index].EndsWith("offset=$($ExpectedOffsets[$index])")) 'Pagination did not advance by actual items'
         }
     }
     $script:testCount++
@@ -62,9 +71,10 @@ try {
     $detail = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = $privateContent } } }
     $empty = New-TestResponse -Payload @{ success = $true; data = @{ notepads = @() } }
     $badId = New-TestResponse -Status 400 -Payload @{ success = $false; errors = @(@{ code = 'common_invalid_res_id'; message = "$target $credential $privateContent" }) }
-    Test-Case @($listed, $detail) 'matched_detail_ok' 2 0
-    Test-Case @($empty) 'not_found_for_current_token' 1
-    Test-Case @((New-TestResponse -Payload @{ notepads = @(@{ id = 'np-other' }) })) 'not_found_for_current_token' 1
+    Test-Case @($listed, $detail) 'matched_detail_ok' 2 0 -ExpectedScanned 1 -ExpectedPages 1
+    Test-Case @($empty, $badId) 'not_found_detail_failed' 2 -ExpectedScanned 0 -ExpectedPages 1 -ExpectedOffsets @(0)
+    $shortPage = New-TestResponse -Payload @{ notepads = @(@{ id = 'np-other' }) }
+    Test-Case @($shortPage, $empty, $detail) 'not_found_detail_ok' 3 0 -ExpectedScanned 1 -ExpectedPages 2 -ExpectedOffsets @(0, 1)
     Test-Case @($listed, $badId) 'matched_detail_failed' 2 -ExpectedCode 'common_invalid_res_id'
     Test-Case @($badId) 'unknown' 1 -ExpectedCode 'common_invalid_res_id'
     Test-Case @((New-TestResponse -Status 401 -Payload @{ errors = @(@{ code = 'common_invalid_token' }) })) 'unknown_authorization' 1
@@ -78,9 +88,11 @@ try {
     Test-Case @($listed, [InvalidOperationException]::new($credential)) 'matched_detail_unknown' 2
     Test-Case @() 'unknown' 0 -Token '' -ExpectedCode 'configuration_unavailable'
     $fullPage = New-TestResponse -Payload @{ data = @{ notepads = @(0..9 | ForEach-Object { @{ id = "np-other-$_" } }) } }
-    Test-Case @($fullPage, $listed, $detail) 'matched_detail_ok' 3 0
-    Test-Case @($fullPage, $empty) 'not_found_for_current_token' 2
-    Test-Case @(1..10 | ForEach-Object { $fullPage }) 'unknown_not_exhausted' 10 -ExpectedCode 'page_limit_reached'
+    Test-Case @($fullPage, $listed, $detail) 'matched_detail_ok' 3 0 -ExpectedScanned 11 -ExpectedPages 2 -ExpectedOffsets @(0, 10)
+    Test-Case @($fullPage, $empty, $badId) 'not_found_detail_failed' 3 -ExpectedScanned 10 -ExpectedPages 2 -ExpectedOffsets @(0, 10)
+    Test-Case @($shortPage, $listed, $detail) 'matched_detail_ok' 3 0 -ExpectedScanned 2 -ExpectedPages 2 -ExpectedOffsets @(0, 1)
+    Test-Case @(1..10 | ForEach-Object { $fullPage }) 'unknown_not_exhausted' 10 -ExpectedCode 'page_limit_reached' -ExpectedScanned 100 -ExpectedPages 10
+    Test-Case (@(1..9 | ForEach-Object { $fullPage }) + @($empty, $badId)) 'not_found_detail_failed' 11 -ExpectedScanned 90 -ExpectedPages 10
     Test-Case @((New-TestResponse -Status 400 -Payload @{ errors = @(@{ code = $credential; message = $privateContent }) })) 'unknown' 1 -ExpectedCode 'unavailable'
 
     # 配置解析必须与现有 sync.yml 一致；拒绝多目标/动态表达式，不猜测 ID。

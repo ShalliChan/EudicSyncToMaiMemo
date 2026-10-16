@@ -208,20 +208,22 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。此工作流独立于同步，仅使用现有 `MAIMEMO_TOKEN` Secret 发起 GET；目标 ID 从现有 `sync.yml` 中的静态 `MaiMemo__DefaultNotepadId` 配置读取，不新增或复制 ID 配置。不会运行同步或通知、写入或删除词本，也不会输出完整 ID、凭证、响应正文或词本内容。
 
-每条诊断日志仅有 `http_status`、`error_code`、`target_match` 三项。`http_status=0` 表示未取得 HTTP 响应或配置不可用；其余为实际 HTTP 状态码。非成功诊断会让该工作流失败，具体含义见下表：
+每条诊断日志仅有 `http_status`、`error_code`、`target_match`、`pages_scanned`、`scanned_count`。后两项分别为已解析的列表页数（含结束空页）及累计扫描条数，不包括详情，不输出任何 ID。`http_status=0` 表示未取得 HTTP 响应或配置不可用；其余为实际 HTTP 状态码。非成功诊断会让该工作流失败，具体含义见下表：
 
 | target_match | 含义与后续检查 |
 |---|---|
 | `unknown_authorization` | 401/403 或错误码表明授权异常；核对 Secret 的 Token 是否与演示页面使用的账号、权限范围和授权方式一致。 |
-| `not_found_for_current_token` | 列表查询成功且已遍历完，但没有精确匹配目标 ID；可能是 Token 用户不同、授权范围或词本可见权限不同，不能仅据此证明词本归属。 |
+| `not_found_for_current_token` | 列表查询成功、遍历到空页且未匹配，随后仍会独立 GET 目标详情；不能仅据列表判断 Token 无权访问或词本归属。 |
 | `matched_in_list` | 当前 Token 的列表中包含目标 ID，随后会使用同一 ID 独立 GET 详情。 |
 | `matched_detail_ok` | 列表匹配且独立详情读取成功；若应用仍失败，优先对照应用版本、实际配置与请求构造。 |
 | `matched_detail_failed` | 列表匹配，但独立详情请求也失败；结合状态码和错误码继续检查资源权限/API 行为，不能直接归因于应用。 |
+| `not_found_detail_ok` | 列表未匹配，但同一 Token 可以读取目标；优先检查列表可见性/过滤行为，而不是认定账号不同。 |
+| `not_found_detail_failed` | 列表未匹配且目标详情请求失败；可确认该请求下无法读取目标，但仅凭资源错误码仍无法区分账号、权限、授权范围或资源状态。 |
 | `not_in_page` | 尚未在当前页匹配，继续下一页，不是最终结论。 |
 | `unknown_not_exhausted` | 达到 10 页的诊断上限，不能认定 ID 不存在。 |
-| `unknown` / `matched_detail_unknown` | 传输、响应结构或其他错误，证据不足；参考状态码和安全错误码。 |
+| `unknown` / `matched_detail_unknown` / `not_found_detail_unknown` | 传输、响应结构或其他错误，证据不足；参考状态码和安全错误码。 |
 
-诊断不重试、不尝试其他 ID、路径或认证方案。列表每页 10 项、最多 10 页，匹配后停止分页；只有匹配时才额外 GET 一次详情。所有响应只在内存处理。可本地运行 Mock 和本机回环测试：`pwsh -File ./scripts/test-maimemo-diagnostics.ps1`，不会请求墨墨。
+诊断不重试、不尝试其他 ID、路径或认证方案。列表每页 10 项、最多 10 页，偏移按实际收到的条数递增，短页后继续查询，空页才确认结束；匹配后停止分页。匹配或遍历至空页后，额外 GET 一次目标详情；达到页数上限且未匹配时只报告未扫描完。所有响应只在内存处理。可本地运行 Mock 和本机回环测试：`pwsh -File ./scripts/test-maimemo-diagnostics.ps1`，不会请求墨墨。
 
 2026-10-16 参数核对：官方 YAML 明确支持整数查询参数 `limit`、`offset`，示例分别为 10 和 0，但未标注最大值；[官方演示](https://www.maimemo.com/pages/openapi-demo/index.html)的数量输入范围为 1–10，[官方 CLI](https://github.com/maimemo/memo-api-cli/blob/main/src/commands/notepad.ts)也默认使用 `limit=10&offset=0`。诊断和主程序均改用 10，后续偏移为 10、20 等，保留参数、认证和同步算法。原先的 100 超出官方演示范围，可能解释 `common_invalid_param`，仍需后续只读诊断确认；不能据此认定详情请求的 `common_invalid_res_id` 已解决。
 

@@ -65,6 +65,12 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
         [scriptblock]$Request = { param($url, $credential) Invoke-MaiMemoDiagnosticGet $url $credential },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
     )
+    $scanStats = @{ Pages = 0; Count = 0 }
+    $sink = $WriteLog
+    $WriteLog = {
+        param($line)
+        & $sink "$line pages_scanned=$($scanStats.Pages) scanned_count=$($scanStats.Count)"
+    }.GetNewClosure()
     try {
         if ([string]::IsNullOrWhiteSpace($Token)) { throw 'Missing credential' }
         $targetId = Get-MaiMemoDiagnosticTargetId $WorkflowPath
@@ -77,10 +83,13 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
     $baseUrl = 'https://open.maimemo.com/open/api/v1/memo/notepads'
     # YAML 支持整数 limit/offset；官方演示输入范围为 1..10，CLI 默认值也是 10。
     $pageSize = 10
+    $offset = 0
+    $foundInList = $false
+    $listComplete = $false
     # 分页不重试；最多 10 页。达到上限不能判定 ID 不存在。
     for ($page = 0; $page -lt 10; $page++) {
-        $offset = ($page * $pageSize).ToString([Globalization.CultureInfo]::InvariantCulture)
-        try { $result = & $Request "${baseUrl}?limit=$pageSize&offset=$offset" $Token }
+        $queryOffset = $offset.ToString([Globalization.CultureInfo]::InvariantCulture)
+        try { $result = & $Request "${baseUrl}?limit=$pageSize&offset=$queryOffset" $Token }
         catch {
             & $WriteLog 'http_status=0 error_code=transport_error target_match=unknown'
             return 1
@@ -109,42 +118,53 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
             return 1
         }
         $found = @($items | Where-Object { $_.id -is [string] -and $_.id -ceq $targetId }).Count -gt 0
+        $scanStats.Pages++
+        $scanStats.Count += $items.Count
         if ($found) {
             & $WriteLog "http_status=$status error_code=none target_match=matched_in_list"
-            # 独立 GET 对照程序详情请求，仅使用相同 ID，不尝试其他格式/路径。
-            try { $detail = & $Request "$baseUrl/$([Uri]::EscapeDataString($targetId))" $Token }
-            catch {
-                & $WriteLog 'http_status=0 error_code=transport_error target_match=matched_detail_unknown'
-                return 1
-            }
-            $detailStatus = [int]$detail.Status
-            try { $detailPayload = ConvertFrom-Json -InputObject $detail.Body -Depth 64 }
-            catch {
-                & $WriteLog "http_status=$detailStatus error_code=non_json_response target_match=matched_detail_unknown"
-                return 1
-            }
-            $detailCode = Get-MaiMemoDiagnosticErrorCode $detailPayload $Token $targetId
-            if ($detailStatus -lt 200 -or $detailStatus -ge 300 -or
-                $detailPayload.success -eq $false -or $detailCode -ne 'none') {
-                & $WriteLog "http_status=$detailStatus error_code=$detailCode target_match=matched_detail_failed"
-                return 1
-            }
-            $notepad = if ($null -ne $detailPayload.data) { $detailPayload.data.notepad } else { $detailPayload.notepad }
-            if ($null -eq $notepad -or $notepad.id -cne $targetId) {
-                & $WriteLog "http_status=$detailStatus error_code=unexpected_detail_response target_match=matched_detail_unknown"
-                return 1
-            }
-            & $WriteLog "http_status=$detailStatus error_code=none target_match=matched_detail_ok"
-            return 0
+            $foundInList = $true
+            break
         }
-        if ($items.Count -lt $pageSize) {
+        if ($items.Count -eq 0) {
             & $WriteLog "http_status=$status error_code=none target_match=not_found_for_current_token"
-            return 1
+            $listComplete = $true
+            break
         }
+        # 不假定短页就是末页；按实际数量推进，避免服务端缩小页面时跳过记录。
+        $offset += $items.Count
         & $WriteLog "http_status=$status error_code=none target_match=not_in_page"
     }
-    & $WriteLog 'http_status=200 error_code=page_limit_reached target_match=unknown_not_exhausted'
-    return 1
+    if (!$foundInList -and !$listComplete) {
+        & $WriteLog 'http_status=200 error_code=page_limit_reached target_match=unknown_not_exhausted'
+        return 1
+    }
+
+    # 列表匹配或完整遍历后，均只用现有 ID/Token 独立 GET 一次详情。
+    $matchPrefix = if ($foundInList) { 'matched' } else { 'not_found' }
+    try { $detail = & $Request "$baseUrl/$([Uri]::EscapeDataString($targetId))" $Token }
+    catch {
+        & $WriteLog "http_status=0 error_code=transport_error target_match=${matchPrefix}_detail_unknown"
+        return 1
+    }
+    $detailStatus = [int]$detail.Status
+    try { $detailPayload = ConvertFrom-Json -InputObject $detail.Body -Depth 64 }
+    catch {
+        & $WriteLog "http_status=$detailStatus error_code=non_json_response target_match=${matchPrefix}_detail_unknown"
+        return 1
+    }
+    $detailCode = Get-MaiMemoDiagnosticErrorCode $detailPayload $Token $targetId
+    if ($detailStatus -lt 200 -or $detailStatus -ge 300 -or
+        $detailPayload.success -eq $false -or $detailCode -ne 'none') {
+        & $WriteLog "http_status=$detailStatus error_code=$detailCode target_match=${matchPrefix}_detail_failed"
+        return 1
+    }
+    $notepad = if ($null -ne $detailPayload.data) { $detailPayload.data.notepad } else { $detailPayload.notepad }
+    if ($null -eq $notepad -or $notepad.id -cne $targetId) {
+        & $WriteLog "http_status=$detailStatus error_code=unexpected_detail_response target_match=${matchPrefix}_detail_unknown"
+        return 1
+    }
+    & $WriteLog "http_status=$detailStatus error_code=none target_match=${matchPrefix}_detail_ok"
+    return 0
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
