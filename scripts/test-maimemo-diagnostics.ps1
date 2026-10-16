@@ -66,7 +66,8 @@ function Test-Case {
 }
 
 function Test-ContentAudit {
-    param([object[]]$Responses, [string[]]$ExpectedLines, [int]$ExpectedExit = 0)
+    param([object[]]$Responses, [string[]]$ExpectedLines, [int]$ExpectedExit = 0,
+        [switch]$LocateLiteralDollarOne)
     $expectedTarget = $target
     $expectedToken = $credential
     $state = @{
@@ -93,11 +94,20 @@ function Test-ContentAudit {
         return $response
     }.GetNewClosure()
     $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
-    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog
+    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne
     Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
     foreach ($line in $ExpectedLines) { Assert-Diagnostic ($state.Logs.Contains($line)) "Missing safe audit metric: $line" }
     foreach ($line in $state.Logs) {
+        if ($line.StartsWith('source=eudic_word_raw anomaly=literal_dollar_one_entry word_json=')) {
+            Assert-Diagnostic ([bool]$LocateLiteralDollarOne) 'Word logging was not enabled'
+            Assert-Diagnostic ($ExpectedLines.Contains($line)) 'Unexpected raw entry logged'
+            Assert-Diagnostic ($line -notmatch '[\r\n\x00-\x1F\x7F]') 'Unescaped control in entry log'
+            foreach ($secret in @($target, $credential, 'private-eudic-token', 'book private', $privateContent)) {
+                Assert-Diagnostic (!$line.Contains($secret, [StringComparison]::Ordinal)) 'Entry log leaked a credential or unrelated content'
+            }
+            continue
+        }
         Assert-Diagnostic ($line -cmatch '^source=[a-z_]+ anomaly=[a-z0-9_]+ codepoints=(?:none|U\+[0-9A-F]{4,6}(?:,U\+[0-9A-F]{4,6})*) count=\d+$') 'Unexpected audit output'
         foreach ($secret in @($target, $credential, $privateContent, 'private-eudic-token', 'book private', 'pear', '正常')) {
             Assert-Diagnostic (!$line.Contains($secret, [StringComparison]::Ordinal)) 'Audit output leaked source text'
@@ -147,6 +157,18 @@ try {
         'source=merge anomaly=words_added codepoints=none count=1'
     )
     $plainNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "# existing`napple" } } }
+    $locateWords = New-TestResponse -Payload @{ data = @(
+        @{ word = 'cost $1'; exp = $privateContent },
+        @{ word = 'normal-private-word'; context_line = 'ignored$1' },
+        @{ word = '$1' + "`n" + [char]17 },
+        @{ word = '$1 ' + $credential + ' NIS private-eudic-token ' + $target + ' book private' }
+    ) }
+    Test-ContentAudit @($plainNotepad, $locateWords) @(
+        'source=eudic_word_raw anomaly=literal_dollar_one_entry word_json="cost $1"',
+        'source=eudic_word_raw anomaly=literal_dollar_one_entry word_json="$1\n\u0011"',
+        'source=eudic_word_raw anomaly=literal_dollar_one_entry word_json="$1 [REDACTED] [REDACTED] [REDACTED] [REDACTED]"',
+        'source=final_content anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=3'
+    ) -LocateLiteralDollarOne
     $controlWord = '$' + [char]17 + '1'
     Test-ContentAudit @($plainNotepad, (New-TestResponse -Payload @{ data = @(@{ word = $controlWord }) })) @(
         'source=eudic_word_raw anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0',

@@ -206,9 +206,9 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 ### 临时只读墨墨诊断
 
-进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。当前工作流启用只读内容审计：使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路词条，在内存中调用生产代码的清理、去重、合并函数，重建拟提交的 content。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录正文、原词、Token、完整 ID 或上下文。
+进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。当前工作流启用只读内容审计：使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路词条，在内存中调用生产代码的清理、去重、合并函数，重建拟提交的 content。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录完整正文、Token、完整 ID 或上下文。按用户授权，临时启用 `MAIMEMO_LOCATE_DOLLAR_ONE=true`，仅额外记录原始 `word` 字段中包含字面量 `$1` 的词条：查找 `anomaly=literal_dollar_one_entry` 的 `word_json`。该值使用 JSON 转义并脱敏现有凭证与 ID，不记录其他词条，也不删除、跳过或修改命中项。关闭此开关后恢复仅统计输出。
 
-审计日志仅有 `source`、`anomaly`、`codepoints`、`count`。对照 `eudic_word_raw`、`notepad_content_raw`、两处 `cleaned` 来源和 `final_content` 的 `literal_dollar_one` 数量，可区分输入已有 `$1`、清理后出现 `$1` 和最终正文不含 `$1`。音标、释义、例句标为 `ignored`，不参与合并；标题、简介、标签标为 `unchanged`，保持生产程序原有行为。审计不会修改原始或拟提交内容来迎合检查。`words_added=0` 时生产程序原本不会 POST。
+统计日志包含 `source`、`anomaly`、`codepoints`、`count`。对照 `eudic_word_raw`、`notepad_content_raw`、两处 `cleaned` 来源和 `final_content` 的 `literal_dollar_one` 数量，可区分输入已有 `$1`、清理后出现 `$1` 和最终正文不含 `$1`。音标、释义、例句标为 `ignored`，不参与合并；标题、简介、标签标为 `unchanged`，保持生产程序原有行为。审计不会修改原始或拟提交内容来迎合检查。`words_added=0` 时生产程序原本不会 POST。
 
 不可见格式字符、特殊空格、符号、孤立代理项等只输出 Unicode 码位和数量，标为 `candidate` 的条目不等于墨墨不允许该字符，正常 Unicode 不会因此被删除。章节标记位置仅作格式提示。`server_error/not_reproduced_read_only` 明确表示此次没有 POST，不能凭只读审计证明服务器 `$1` 的模板含义，也不能排除两次运行之间数据变化。
 

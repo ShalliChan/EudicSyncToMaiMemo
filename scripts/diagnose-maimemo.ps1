@@ -221,6 +221,7 @@ function Invoke-MaiMemoContentAudit {
         [string]$Token,
         [string]$EudicAuthorization,
         [string]$EudicBookId,
+        [switch]$LocateLiteralDollarOne,
         [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
@@ -313,6 +314,18 @@ function Invoke-MaiMemoContentAudit {
     $merged = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::Merge($existingLines, $cleanedWords)
     $finalContent = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::JoinContentLines($merged.Item2)
     & $WriteLog "source=eudic_word_raw anomaly=entries_scanned codepoints=none count=$($words.Count)"
+    if ($LocateLiteralDollarOne) {
+        foreach ($word in $words) {
+            if (!$word.Contains('$1', [StringComparison]::Ordinal)) { continue }
+            # 仅定位用户授权的原始 word 命中项；JSON 转义防止换行/控制字符注入日志。
+            $safeWord = $word
+            foreach ($secret in @($Token, $EudicAuthorization, ($EudicAuthorization -replace '^\S+\s+', ''), $targetId, $EudicBookId)) {
+                if (![string]::IsNullOrEmpty($secret)) { $safeWord = $safeWord.Replace($secret, '[REDACTED]') }
+            }
+            $encodedWord = ConvertTo-Json -InputObject $safeWord -Compress -EscapeHandling EscapeNonAscii
+            & $WriteLog "source=eudic_word_raw anomaly=literal_dollar_one_entry word_json=$encodedWord"
+        }
+    }
     & $WriteLog "source=merge anomaly=words_added codepoints=none count=$($merged.Item1.Count)"
     Write-MaiMemoTextAudit 'eudic_word_raw' $words.ToArray() $WriteLog
     Write-MaiMemoTextAudit 'notepad_content_raw' @($notepad.content) $WriteLog
@@ -336,7 +349,7 @@ function Invoke-MaiMemoContentAudit {
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($env:MAIMEMO_CONTENT_AUDIT -eq 'true') {
-            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID)
+            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true'))
         }
         exit (Invoke-MaiMemoReadOnlyDiagnostic -Token $env:MAIMEMO_TOKEN)
     }
