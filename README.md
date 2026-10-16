@@ -208,11 +208,13 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路全部分页词条。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录词条、笔记正文、Token、完整 ID 或上下文。此前定位 `$1` 的逐条输出开关已关闭。
 
-当前启用 `MAIMEMO_TITLE_AUDIT=true`，仅在内存中评估候选标题，正式同步尚未采用提取规则。单行候选必须完整符合字母词/短语形式，保留空格、Unicode 字母、组合附加符、词内连字符及撇号；不截取首个空格，也不删除行内 Markdown 或释义后猜标题。多行记录仅接受 Markdown 标题、首行后有显式笔记标题（如 `笔记：`、`Notes:`、`## Notes`），或用户已确认的纯首行 `at a cost`。其他多行结构及不支持格式只计为待跳过，源数据不变。这是保守的结构检查，不能证明任意纯字母短语的语义。
+当前启用 `MAIMEMO_TITLE_AUDIT=true`，仅在内存中评估候选标题，正式同步尚未采用提取规则。候选允许词形中的数字、句点、Unicode 字母、组合附加符、词内连字符及撇号，完整保留短语空格；纯数字、复杂分隔符和括号不自动处理。多词且以句点结尾、无法确认是缩写的内容仍保守跳过。多行记录须有 Markdown 标题或显式笔记标题；不再对 `at a cost` 使用特殊截取规则。新增的通用行内边界限于：英文标题后 `:`/`：`/`=` 加中文释义（或 `meaning:`/`definition:`），明确的 `释义：` 等标记，以及“是一个/是一种”中文说明引导。不按第一个空格截断，不把任意中英文相邻当边界，也不回传笔记。这是保守的结构检查，仍需实际数据审计，不能证明任意纯字母短语的语义。
 
 查看 `source=title_extraction`：`scanned` 为完整扫描条数；`syncable + skipped = scanned`；`plain`、`notes_extracted` 为可用候选分类；`ambiguous_multiline`、`unsupported_title` 为待跳过原因。`unique_titles`、`duplicate_titles` 区分词条与唯一标题，`already_present`、`would_add` 按原有逐行、区分大小写的合并规则统计。`confirmed_at_a_cost` 统计保留该短语的条数。`source=extracted_titles` 检查候选标题中是否还存在 `$1` 等字符。不会因跳过而删除墨墨已有行；未做 POST，数量不代表服务器已接受。必须先核对本次实际统计，再决定正式同步改动。
 
 待跳过词条现额外输出 `source=title_skipped` 的互斥结构分类，各类数量之和等于 `skipped`：`same_line_definition_candidate`（疑似同一行释义）、`markdown_or_markup`、`note_heading`、`ambiguous_multiline`、`invisible_or_control`、`annotation_or_parentheses`、`multiple_title_separators`、`punctuated_or_alphanumeric_candidate`（可能是正常缩写/含数字词形）、`symbols_numbers_or_punctuation`，以及空值、首行缺失、非英文笔记候选和未分类项。`source=title_rule_review` 统计可能值得评估的通用规则及其命中数量：`definition_boundary_candidate`、`standalone_markdown_candidate`、`possible_normal_term`。这些是结构信号，不证明可可靠提取，也不证明其他分类都是异常词；本次未改变任何提取或正式同步规则，不输出被跳过词条的正文。仅凭聚合数量不能验证语义，未分类项保持待复核。
+
+标题审计额外模拟增量正文：保留已有 `content` 为完整前缀（含换行与空行），仅在末尾追加去重的新标题。查看 `existing_content_preserved=1`、`existing_chapters`、`final_chapters`、`existing_lines`、`final_lines` 及 `second_merge_additions=0`；`proposed_final_content` 只输出字符统计，不输出正文。这是候选更新结构，当前正式同步尚未采用。官方 `api_bundle.yaml` 的更新接口要求 `notepad` 的 `status/content/title/brief/tags`，还将请求体 `id` 标为必填；`title` 是词本名称，提取的词条标题应追加在完整 `content` 中，不能只提交新增正文或把词条放到 `title`。实际审计通过后再调整正式请求及同步逻辑。
 
 关闭标题审计后，原内容审计会在内存中调用生产清理、去重、合并函数，重建原同步逻辑拟提交的 content：
 

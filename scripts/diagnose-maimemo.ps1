@@ -224,20 +224,27 @@ function Get-EudicTitleCandidate {
     $hasNotes = $lines.Count -gt 1 -and ![string]::IsNullOrWhiteSpace(($lines[1..($lines.Count - 1)] -join "`n"))
     $heading = [regex]::Match($first, '^#{1,6} (?<title>.+)$')
     $title = if ($heading.Success) { $heading.Groups['title'].Value.Trim() } else { $first }
+    $definitionBoundary = $false
+    # 只有显式释义标记或分隔符后的中文释义才作为边界；不把任意中英文相邻当边界。
+    $definition = [regex]::Match($title, '^(?<title>[A-Za-z0-9][A-Za-z0-9 .''\u2019\u2010\u2011-]*?)(?:\s*[:：=]\s*(?:[\u3400-\u9FFF]|(?:meaning|definition)\s*:)|\s+(?:释义|词义|含义|意思|解释)\s*[:：]|\s+是(?:一个|一种)[\u3400-\u9FFF])', 'IgnoreCase')
+    if ($definition.Success) { $title = $definition.Groups['title'].Value.Trim(); $definitionBoundary = $true }
     # 只接受完整词/短语，不按空格截断，不剥除行内 Markdown、释义、金额或句子标点。
-    $lexical = $title -cmatch '^\p{L}[\p{L}\p{M}]*(?:[''\u2019\u2010\u2011-]\p{L}[\p{L}\p{M}]*)*(?: +\p{L}[\p{L}\p{M}]*(?:[''\u2019\u2010\u2011-]\p{L}[\p{L}\p{M}]*)*)*$'
+    $token = '[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*(?:[''\u2019\u2010\u2011-][\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*(?:\.[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*\.?'
+    $lexical = $title -cmatch "^$token(?: +$token)*$" -and $title -match '\p{L}' -and $title -notmatch '[\u3400-\u9FFF]'
+    # 带句末句点的整句不因放宽缩写规则而进入候选；词内缩写及独立缩写保留原文。
+    if ($title.Contains(' ') -and $title.EndsWith('.') -and $title -cnotmatch '(?:^| )(?:\p{L}\.){2,}$') { $lexical = $false }
     if (!$lexical -or $title -match '^(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)$') {
         return @{ Title = $null; Reason = 'unsupported_title' }
     }
     if ($hasNotes) {
         $rest = ($lines[1..($lines.Count - 1)] -join "`n").TrimStart()
         $explicitNotes = $rest -match '^(?:#{1,6} |(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)[:：])'
-        # at a cost 的纯首行已由用户核对；不推广为任意多行数据取首行。
-        if (!$heading.Success -and !$explicitNotes -and $title -cne 'at a cost') {
+        # 任意多行记录都要求明确边界，不针对单个短语添加例外。
+        if (!$heading.Success -and !$explicitNotes -and !$definitionBoundary) {
             return @{ Title = $null; Reason = 'ambiguous_multiline' }
         }
     }
-    return @{ Title = $title; Reason = $(if ($hasNotes -or $heading.Success) { 'notes_extracted' } else { 'plain' }) }
+    return @{ Title = $title; Reason = $(if ($hasNotes -or $heading.Success -or $definitionBoundary) { 'notes_extracted' } else { 'plain' }) }
 }
 
 # 仅描述已经被跳过的原始数据形态，不提取新标题或改变跳过决定。
@@ -297,6 +304,17 @@ function Write-EudicTitleAudit {
     $counts.duplicate_titles = $titles.Count - $unique.Count
     $counts.already_present = $unique.Count - $merge.Item1.Count
     $counts.would_add = $merge.Item1.Count
+    # 更新 content 必须携带完整已有正文；保留 CRLF、空行和章节，仅追加新增标题。
+    $suffix = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::JoinContentLines($merge.Item1)
+    $separator = if ($ExistingContent.Length -gt 0 -and !$ExistingContent.EndsWith("`n") -and $suffix) { "`n" } else { '' }
+    $finalContent = $ExistingContent + $separator + $suffix
+    $counts.existing_lines = $existing.Count
+    $counts.existing_chapters = [regex]::Matches($ExistingContent, '(?m)^#').Count
+    $counts.final_chapters = [regex]::Matches($finalContent, '(?m)^#').Count
+    $counts.final_lines = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($finalContent).Count
+    $counts.existing_content_preserved = [int]$finalContent.StartsWith($ExistingContent, [StringComparison]::Ordinal)
+    $counts.second_merge_additions = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::Merge(
+        [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($finalContent), $titles).Item1.Count
     foreach ($key in ($counts.Keys | Sort-Object)) {
         & $WriteLog "source=title_extraction anomaly=$key codepoints=none count=$($counts[$key])"
     }
@@ -309,6 +327,7 @@ function Write-EudicTitleAudit {
     }
     # 保持已有词本逐行不变；只在内存中检查候选新增标题。
     Write-MaiMemoTextAudit 'extracted_titles' $titles.ToArray() $WriteLog
+    Write-MaiMemoTextAudit 'proposed_final_content' @($finalContent) $WriteLog
 }
 
 function Invoke-MaiMemoContentAudit {

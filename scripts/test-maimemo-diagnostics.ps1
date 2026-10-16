@@ -159,7 +159,7 @@ try {
         @{ Word = 'café'; Title = 'café'; Reason = 'plain' },
         @{ Word = "don't"; Title = "don't"; Reason = 'plain' },
         @{ Word = 'well-known'; Title = 'well-known'; Reason = 'plain' },
-        @{ Word = "at a cost`r`n中文学习笔记`nExample costs `$1 million."; Title = 'at a cost'; Reason = 'notes_extracted' },
+        @{ Word = "at a cost`r`n中文学习笔记`nExample costs `$1 million."; Title = $null; Reason = 'ambiguous_multiline' },
         @{ Word = "# carry with`n`n释义：中文`nExample sentence."; Title = 'carry with'; Reason = 'notes_extracted' },
         @{ Word = "carry with`n`n笔记：说明`n例句：内容"; Title = 'carry with'; Reason = 'notes_extracted' },
         @{ Word = "carry with`n## Notes`nExamples."; Title = 'carry with'; Reason = 'notes_extracted' },
@@ -167,7 +167,22 @@ try {
         @{ Word = "Example sentence`nMore text"; Title = $null; Reason = 'ambiguous_multiline' },
         @{ Word = "carry with`n中文解释但无明确边界"; Title = $null; Reason = 'ambiguous_multiline' },
         @{ Word = '**at a cost**'; Title = $null; Reason = 'unsupported_title' },
-        @{ Word = 'at a cost = 中文解释'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'at a cost = 中文解释'; Title = 'at a cost'; Reason = 'notes_extracted' },
+        @{ Word = 'U.S.'; Title = 'U.S.'; Reason = 'plain' },
+        @{ Word = 'Ph.D.'; Title = 'Ph.D.'; Reason = 'plain' },
+        @{ Word = 'B2B'; Title = 'B2B'; Reason = 'plain' },
+        @{ Word = '3D printing'; Title = '3D printing'; Reason = 'plain' },
+        @{ Word = 'vitamin B12'; Title = 'vitamin B12'; Reason = 'plain' },
+        @{ Word = "at a cost 是一个常见短语：`n笔记和 `$1 例句"; Title = 'at a cost'; Reason = 'notes_extracted' },
+        @{ Word = 'carry with 释义：携带'; Title = 'carry with'; Reason = 'notes_extracted' },
+        @{ Word = 'carry with 中文解释'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'carry with: explanation'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'The project was completed.'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = '123'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'word (noun)'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'word/other'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'word, other'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'word; other'; Title = $null; Reason = 'unsupported_title' },
         @{ Word = 'at a cost 中文：解释'; Title = $null; Reason = 'unsupported_title' },
         @{ Word = 'Example costs $1 million.'; Title = $null; Reason = 'unsupported_title' },
         @{ Word = '- apple'; Title = $null; Reason = 'unsupported_title' },
@@ -222,7 +237,7 @@ try {
     $plainNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "# existing`napple" } } }
     $titleWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'apple' },
-        @{ word = "at a cost`n$privateContent costs `$1 million." },
+        @{ word = "at a cost 释义：中文`n$privateContent costs `$1 million." },
         @{ word = 'at a cost' },
         @{ word = "# carry with`n## Notes`n$privateContent" },
         @{ word = "unknown phrase`n$privateContent" },
@@ -245,6 +260,17 @@ try {
         'source=title_rule_review anomaly=standalone_markdown_candidate codepoints=none count=1',
         'source=extracted_titles anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0'
     ) -TitleAudit -LocateLiteralDollarOne
+    $chapterNotepad = New-TestResponse -Payload @{ data = @{ notepad = @{ id = $target; content = "# first`r`napple`r`n`r`n# second`r`nU.S.`r`n" } } }
+    Test-ContentAudit @($chapterNotepad, (New-TestResponse -Payload @{ data = @(@{ word = 'apple' }, @{ word = 'U.S.' }, @{ word = 'B2B' }, @{ word = 'B2B' }) })) @(
+        'source=title_extraction anomaly=would_add codepoints=none count=1',
+        'source=title_extraction anomaly=duplicate_titles codepoints=none count=1',
+        'source=title_extraction anomaly=existing_content_preserved codepoints=none count=1',
+        'source=title_extraction anomaly=existing_chapters codepoints=none count=2',
+        'source=title_extraction anomaly=final_chapters codepoints=none count=2',
+        'source=title_extraction anomaly=existing_lines codepoints=none count=4',
+        'source=title_extraction anomaly=final_lines codepoints=none count=5',
+        'source=title_extraction anomaly=second_merge_additions codepoints=none count=0'
+    ) -TitleAudit
     $skippedWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'at a cost：是一个短语' }, @{ word = '**carry with**' }, @{ word = 'U.S.' },
         @{ word = 'B2B' }, @{ word = 'Notes: private details' }, @{ word = 'word/another' },
@@ -253,13 +279,13 @@ try {
     ) }
     Test-ContentAudit @($plainNotepad, $skippedWords) @(
         'source=title_extraction anomaly=scanned codepoints=none count=10',
-        'source=title_extraction anomaly=syncable codepoints=none count=0',
-        'source=title_extraction anomaly=skipped codepoints=none count=10',
-        'source=title_skipped anomaly=same_line_definition_candidate codepoints=none count=1',
-        'source=title_skipped anomaly=punctuated_or_alphanumeric_candidate codepoints=none count=2',
-        'source=title_rule_review anomaly=possible_normal_term codepoints=none count=2',
-        'source=title_rule_review anomaly=definition_boundary_candidate codepoints=none count=1',
-        'source=title_extraction anomaly=would_add codepoints=none count=0'
+        'source=title_extraction anomaly=syncable codepoints=none count=3',
+        'source=title_extraction anomaly=skipped codepoints=none count=7',
+        'source=title_extraction anomaly=would_add codepoints=none count=3',
+        'source=title_extraction anomaly=existing_content_preserved codepoints=none count=1',
+        'source=title_extraction anomaly=existing_chapters codepoints=none count=1',
+        'source=title_extraction anomaly=final_chapters codepoints=none count=1',
+        'source=title_extraction anomaly=second_merge_additions codepoints=none count=0'
     ) -TitleAudit
     $locateWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'cost $1'; exp = $privateContent },
