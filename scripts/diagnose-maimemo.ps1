@@ -216,12 +216,64 @@ function Write-MaiMemoTextAudit {
     }
 }
 
+# 仅供只读评估；正式同步尚未采用此候选规则。
+function Get-EudicTitleCandidate {
+    param([AllowEmptyString()][string]$Word)
+    $lines = [regex]::Split($Word, '\r\n|\n|\r')
+    $first = $lines[0].Trim()
+    $hasNotes = $lines.Count -gt 1 -and ![string]::IsNullOrWhiteSpace(($lines[1..($lines.Count - 1)] -join "`n"))
+    $heading = [regex]::Match($first, '^#{1,6} (?<title>.+)$')
+    $title = if ($heading.Success) { $heading.Groups['title'].Value.Trim() } else { $first }
+    # 只接受完整词/短语，不按空格截断，不剥除行内 Markdown、释义、金额或句子标点。
+    $lexical = $title -cmatch '^\p{L}[\p{L}\p{M}]*(?:[''\u2019\u2010\u2011-]\p{L}[\p{L}\p{M}]*)*(?: +\p{L}[\p{L}\p{M}]*(?:[''\u2019\u2010\u2011-]\p{L}[\p{L}\p{M}]*)*)*$'
+    if (!$lexical -or $title -match '^(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)$') {
+        return @{ Title = $null; Reason = 'unsupported_title' }
+    }
+    if ($hasNotes) {
+        $rest = ($lines[1..($lines.Count - 1)] -join "`n").TrimStart()
+        $explicitNotes = $rest -match '^(?:#{1,6} |(?:学习笔记|笔记|释义|例句|Notes|Examples|Definition)[:：])'
+        # at a cost 的纯首行已由用户核对；不推广为任意多行数据取首行。
+        if (!$heading.Success -and !$explicitNotes -and $title -cne 'at a cost') {
+            return @{ Title = $null; Reason = 'ambiguous_multiline' }
+        }
+    }
+    return @{ Title = $title; Reason = $(if ($hasNotes -or $heading.Success) { 'notes_extracted' } else { 'plain' }) }
+}
+
+function Write-EudicTitleAudit {
+    param([string[]]$Words, [string]$ExistingContent, [scriptblock]$WriteLog)
+    $titles = [Collections.Generic.List[string]]::new()
+    $counts = @{ scanned = $Words.Count; syncable = 0; skipped = 0; plain = 0; notes_extracted = 0;
+        ambiguous_multiline = 0; unsupported_title = 0; confirmed_at_a_cost = 0 }
+    foreach ($word in $Words) {
+        $candidate = Get-EudicTitleCandidate $word
+        $counts[$candidate.Reason]++
+        if ($null -eq $candidate.Title) { $counts.skipped++; continue }
+        $counts.syncable++
+        $titles.Add($candidate.Title)
+        if ($candidate.Title -ceq 'at a cost') { $counts.confirmed_at_a_cost++ }
+    }
+    $existing = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($ExistingContent)
+    $merge = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::Merge($existing, $titles)
+    $unique = [Collections.Generic.HashSet[string]]::new($titles, [StringComparer]::Ordinal)
+    $counts.unique_titles = $unique.Count
+    $counts.duplicate_titles = $titles.Count - $unique.Count
+    $counts.already_present = $unique.Count - $merge.Item1.Count
+    $counts.would_add = $merge.Item1.Count
+    foreach ($key in ($counts.Keys | Sort-Object)) {
+        & $WriteLog "source=title_extraction anomaly=$key codepoints=none count=$($counts[$key])"
+    }
+    # 保持已有词本逐行不变；只在内存中检查候选新增标题。
+    Write-MaiMemoTextAudit 'extracted_titles' $titles.ToArray() $WriteLog
+}
+
 function Invoke-MaiMemoContentAudit {
     param(
         [string]$Token,
         [string]$EudicAuthorization,
         [string]$EudicBookId,
         [switch]$LocateLiteralDollarOne,
+        [switch]$TitleAudit,
         [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
@@ -303,6 +355,10 @@ function Invoke-MaiMemoContentAudit {
         return 1
     }
 
+    if ($TitleAudit) {
+        Write-EudicTitleAudit $words.ToArray() $notepad.content $WriteLog
+        return 0
+    }
     $removed = 0
     $cleanedExisting = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::RemoveInvalidControlCharacters($notepad.content, [ref]$removed)
     $cleanedWords = [Collections.Generic.List[string]]::new()
@@ -349,7 +405,7 @@ function Invoke-MaiMemoContentAudit {
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($env:MAIMEMO_CONTENT_AUDIT -eq 'true') {
-            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true'))
+            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true'))
         }
         exit (Invoke-MaiMemoReadOnlyDiagnostic -Token $env:MAIMEMO_TOKEN)
     }

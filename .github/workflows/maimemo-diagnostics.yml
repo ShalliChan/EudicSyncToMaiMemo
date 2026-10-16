@@ -18,6 +18,6 @@ jobs:
         env:
           MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
           MAIMEMO_CONTENT_AUDIT: 'true'
-          MAIMEMO_LOCATE_DOLLAR_ONE: 'true'
+          MAIMEMO_TITLE_AUDIT: 'true'
           EUDIC_AUTHORIZATION: ${{ secrets.EUDIC_AUTHORIZATION }}
           EUDIC_BOOK_ID: ${{ secrets.EUDIC_BOOK_ID }}

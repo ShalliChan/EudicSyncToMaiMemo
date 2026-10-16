@@ -67,7 +67,7 @@ function Test-Case {
 
 function Test-ContentAudit {
     param([object[]]$Responses, [string[]]$ExpectedLines, [int]$ExpectedExit = 0,
-        [switch]$LocateLiteralDollarOne)
+        [switch]$LocateLiteralDollarOne, [switch]$TitleAudit)
     $expectedTarget = $target
     $expectedToken = $credential
     $state = @{
@@ -94,7 +94,7 @@ function Test-ContentAudit {
         return $response
     }.GetNewClosure()
     $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
-    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne
+    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit
     Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
     foreach ($line in $ExpectedLines) { Assert-Diagnostic ($state.Logs.Contains($line)) "Missing safe audit metric: $line" }
@@ -117,6 +117,34 @@ function Test-ContentAudit {
 }
 
 try {
+    foreach ($case in @(
+        @{ Word = 'apple'; Title = 'apple'; Reason = 'plain' },
+        @{ Word = 'at a cost'; Title = 'at a cost'; Reason = 'plain' },
+        @{ Word = 'carry with'; Title = 'carry with'; Reason = 'plain' },
+        @{ Word = 'café'; Title = 'café'; Reason = 'plain' },
+        @{ Word = "don't"; Title = "don't"; Reason = 'plain' },
+        @{ Word = 'well-known'; Title = 'well-known'; Reason = 'plain' },
+        @{ Word = "at a cost`r`n中文学习笔记`nExample costs `$1 million."; Title = 'at a cost'; Reason = 'notes_extracted' },
+        @{ Word = "# carry with`n`n释义：中文`nExample sentence."; Title = 'carry with'; Reason = 'notes_extracted' },
+        @{ Word = "carry with`n`n笔记：说明`n例句：内容"; Title = 'carry with'; Reason = 'notes_extracted' },
+        @{ Word = "carry with`n## Notes`nExamples."; Title = 'carry with'; Reason = 'notes_extracted' },
+        @{ Word = "apple`npear"; Title = $null; Reason = 'ambiguous_multiline' },
+        @{ Word = "Example sentence`nMore text"; Title = $null; Reason = 'ambiguous_multiline' },
+        @{ Word = "carry with`n中文解释但无明确边界"; Title = $null; Reason = 'ambiguous_multiline' },
+        @{ Word = '**at a cost**'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'at a cost = 中文解释'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'at a cost 中文：解释'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = 'Example costs $1 million.'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = '- apple'; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = "# Notes`nExample."; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = "`napple"; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = ''; Title = $null; Reason = 'unsupported_title' },
+        @{ Word = "app`u{0011}le"; Title = $null; Reason = 'unsupported_title' }
+    )) {
+        $candidate = Get-EudicTitleCandidate $case.Word
+        Assert-Diagnostic ($candidate.Title -ceq $case.Title -and $candidate.Reason -ceq $case.Reason) 'Unexpected title extraction'
+        $testCount++
+    }
     [IO.File]::WriteAllText($workflowFile, "env:`n  MaiMemo__DefaultNotepadId: `"$target`"`n")
     $listed = New-TestResponse -Payload @{ success = $true; data = @{ notepads = @(@{ id = $target; content = $privateContent }) } }
     $detail = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = $privateContent } } }
@@ -157,6 +185,28 @@ try {
         'source=merge anomaly=words_added codepoints=none count=1'
     )
     $plainNotepad = New-TestResponse -Payload @{ success = $true; data = @{ notepad = @{ id = $target; content = "# existing`napple" } } }
+    $titleWords = New-TestResponse -Payload @{ data = @(
+        @{ word = 'apple' },
+        @{ word = "at a cost`n$privateContent costs `$1 million." },
+        @{ word = 'at a cost' },
+        @{ word = "# carry with`n## Notes`n$privateContent" },
+        @{ word = "unknown phrase`n$privateContent" },
+        @{ word = '**not a clear title**' }
+    ) }
+    Test-ContentAudit @($plainNotepad, $titleWords) @(
+        'source=title_extraction anomaly=scanned codepoints=none count=6',
+        'source=title_extraction anomaly=syncable codepoints=none count=4',
+        'source=title_extraction anomaly=skipped codepoints=none count=2',
+        'source=title_extraction anomaly=notes_extracted codepoints=none count=2',
+        'source=title_extraction anomaly=ambiguous_multiline codepoints=none count=1',
+        'source=title_extraction anomaly=unsupported_title codepoints=none count=1',
+        'source=title_extraction anomaly=confirmed_at_a_cost codepoints=none count=2',
+        'source=title_extraction anomaly=unique_titles codepoints=none count=3',
+        'source=title_extraction anomaly=duplicate_titles codepoints=none count=1',
+        'source=title_extraction anomaly=already_present codepoints=none count=1',
+        'source=title_extraction anomaly=would_add codepoints=none count=2',
+        'source=extracted_titles anomaly=literal_dollar_one codepoints=U+0024,U+0031 count=0'
+    ) -TitleAudit -LocateLiteralDollarOne
     $locateWords = New-TestResponse -Payload @{ data = @(
         @{ word = 'cost $1'; exp = $privateContent },
         @{ word = 'normal-private-word'; context_line = 'ignored$1' },
@@ -194,6 +244,13 @@ try {
         'source=eudic_word_raw anomaly=entries_scanned codepoints=none count=101',
         'source=merge anomaly=words_added codepoints=none count=101'
     )
+    $titlePage = New-TestResponse -Payload @{ data = @(1..100 | ForEach-Object { @{ word = 'apple' } }) }
+    Test-ContentAudit @($plainNotepad, $titlePage, (New-TestResponse -Payload @{ data = @(@{ word = 'at a cost' }) })) @(
+        'source=title_extraction anomaly=scanned codepoints=none count=101',
+        'source=title_extraction anomaly=syncable codepoints=none count=101',
+        'source=title_extraction anomaly=skipped codepoints=none count=0',
+        'source=title_extraction anomaly=would_add codepoints=none count=1'
+    ) -TitleAudit
     Test-ContentAudit @((New-TestResponse -Status 401 -Payload @{ errors = @(@{ message = $privateContent }) })) @(
         'source=maimemo_fetch anomaly=http_401 codepoints=none count=1'
     ) -ExpectedExit 1
