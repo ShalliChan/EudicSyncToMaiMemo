@@ -1,6 +1,9 @@
 name: Sync Words
 
 on:
+  schedule:
+    # UTC 01:05 = 北京时间 09:05，避开整点。
+    - cron: '5 1 * * *'
   workflow_dispatch:
 
 jobs:
