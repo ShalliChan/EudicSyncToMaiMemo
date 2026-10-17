@@ -33,3 +33,7 @@ jobs:
     - name: Test read-only MaiMemo diagnostics
       shell: pwsh
       run: ./scripts/test-maimemo-diagnostics.ps1
+
+    - name: Test strict notebook provisioning (mock only)
+      shell: pwsh
+      run: ./scripts/test-provision-strict-notepad.ps1

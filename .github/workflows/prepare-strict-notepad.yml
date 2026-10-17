@@ -1,0 +1,43 @@
+name: Prepare Strict MaiMemo Notebook
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-strict-maimemo-notebook
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      STRICT_NOTEBOOK_MANIFEST: ${{ github.workspace }}/strict-notepad-result.json
+    steps:
+      - uses: actions/checkout@v6
+      - name: Find or create notebook (no words written)
+        shell: pwsh
+        run: ./scripts/provision-strict-notepad.ps1
+        env:
+          MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
+      - name: Strict read-only verification (GET only)
+        shell: pwsh
+        run: |
+          . ./scripts/provision-strict-notepad.ps1
+          Invoke-StrictManifestPreview -ManifestPath $env:STRICT_NOTEBOOK_MANIFEST -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID
+        env:
+          MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
+          EUDIC_AUTHORIZATION: ${{ secrets.EUDIC_AUTHORIZATION }}
+          EUDIC_BOOK_ID: ${{ secrets.EUDIC_BOOK_ID }}
+      - name: Save verified identity (no credentials)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strict-notepad-result
+          path: ${{ env.STRICT_NOTEBOOK_MANIFEST }}
+          if-no-files-found: ignore
+          retention-days: 7

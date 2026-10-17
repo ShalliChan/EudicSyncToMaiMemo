@@ -206,14 +206,22 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 ### 严格同步与新词本迁移
 
+自动定时已暂时停用：`Sync Words` 当前仅保留 `workflow_dispatch`，不会在定时或推送时同步。
+
+若官方演示网页无法创建词本，可手动运行 **Actions → Prepare Strict MaiMemo Notebook → Run workflow → main**。该工作流在 GitHub 云端使用现有 Secret，不读取或导出 Token 明文。它完整分页查询名称「欧路词典同步（严格）」；无匹配时仅创建一次，发送官方五个必填字段 `status=UNPUBLISHED`、指定标题/简介、章节正文、`tags=[]`，不写入单词。有唯一同名词本时仅 GET 复用并核对其状态、简介和空章节正文；多个同名、字段不符或请求失败即停止，无自动重试。
+
+创建后 GET 验证完整 ID，再用临时配置对新 ID 调用现有严格只读预览。必须满足 `ready=1`、`prepared_set_equal=1`、`extra=0`、`target_duplicates=0`、`invalid_lines=0` 才将 `strict-notepad-result` artifact 的 `preview_verified` 设为 true。artifact 只含 ID、元数据及验证标志，不含 Token/欧路内容。若验证失败，不再点击重跑或尝试重复创建，先查看具体失败阶段。工作流不运行 Sync Words、不改旧词本、不向新词本写入标题。
+
+云端工作流只有仓库读取权限，不尝试修改其他工作流文件。运行后提供运行编号，读取 artifact 并确认 `detail_verified=true`、`preview_verified=true` 后，才将新 ID 写入 `sync.yml` 并 Commit/Push；此前旧 ID 保持不变。整个过程中保持手动触发，完成迁移验收后再另行决定是否恢复定时。
+
 OpenAPI 正式同步只接受完整欧路收藏记录本身就是有效标题的条目：一个收藏最多对应一个完整标题，精确、区分大小写去重；不拆短语、不生成变体，不从 Markdown、释义或多行笔记提取前缀。控制字符仍按原规则在内存中清理，不修改欧路数据。来源审计基准为 791 条原始记录、781 个有效独立唯一标题、9 条无效/歧义记录，另有 1 条笔记记录被排除（此前提取的标题已在独立收藏中存在），故严格模式总排除 10 条，目标标题数量仍是 781。源词库发生变化时以新预览为准。
 
-正式同步与只读预览共用 `ExtractIndependentTitle` / `PrepareStrictContent`。新空词本正文生成 `# 欧路词典同步` 章节头，然后每行一个完整标题，不启用 `//`。已有合法章节、换行、空行和标题只保留并追加，不重新拼接或自动删除。目标若不是章节格式，或含源外标题、重复行、无效行，会在 POST 前拒绝更新；旧词本不会被自动清空。源内新增标题在原定时计划下自动追加；欧路删除/改名导致源外行时会提示复核，不自动删除墨墨历史学习内容。
+正式同步与只读预览共用 `ExtractIndependentTitle` / `PrepareStrictContent`。新空词本正文生成 `# 欧路词典同步` 章节头，然后每行一个完整标题，不启用 `//`。已有合法章节、换行、空行和标题只保留并追加，不重新拼接或自动删除。目标若不是章节格式，或含源外标题、重复行、无效行，会在 POST 前拒绝更新；旧词本不会被自动清空。源内新增标题支持增量追加；当前定时暂时关闭，仅在手动触发时同步；欧路删除/改名导致源外行时会提示复核，不自动删除墨墨历史学习内容。
 
 迁移步骤：
 
 1. 手动在墨墨中创建新词本，例如「欧路词典同步（严格）」，保留旧词本。正文留空；若界面要求正文，**只填一行 `# 欧路词典同步`**，不填占位单词。通过官方演示/API复制新词本的完整 `np-` ID，勿使用截断显示或网页版数字 ID。
-2. 在 GitHub 编辑 `.github/workflows/sync.yml`，只把 `Run Sync` 步骤环境变量 `MaiMemo__DefaultNotepadId` 改为新 ID，提交到 `main`。该 ID 当前直接写在工作流里，不是 Secret；不要改 Token、其他 Secrets、API 路径或定时设置。诊断自动从同一文件读取目标 ID。
+2. 在 GitHub 编辑 `.github/workflows/sync.yml`，只把 `Run Sync` 步骤环境变量 `MaiMemo__DefaultNotepadId` 改为新 ID，提交到 `main`。该 ID 当前直接写在工作流里，不是 Secret；不要改 Token、其他 Secrets 或 API 路径；保持当前仅手动触发。诊断自动从同一文件读取目标 ID。
 3. 在 Actions → **MaiMemo Read-only Diagnostics** → **Run workflow → main** 新建运行。当前 `MAIMEMO_STRICT_PREVIEW=true` 优先于历史来源/标题审计。查看 `source=strict_preview`：`ready=1`、`extra=0`、`target_duplicates=0`、`invalid_lines=0`、`prepared_set_equal=1`。未变化源数据的新空目标应为 `unique_titles=781`、`would_add=781`、`invalid_or_ambiguous=9`、`notes_excluded=1`。`ready=0` 时按原因复核目标，不直接运行同步。
 4. 手动运行 **Sync Words → Run workflow → main** 一次。写入携带完整正文和原元数据，随后 GET 校验正文集合；失败不自动重试。再运行只读诊断，确认 `current_set_equal=1`、`missing=0`、`extra=0`、`target_duplicates=0`、`would_add=0`。第二次同步也不会重复添加。
 5. `source=parser_layer anomaly=expressions_without_body_line` 仅表示墨墨解析层的正文外表达，不表示程序新增；不能通过删除正常源标题来修正。验收以正文集合为准，同时单独查看解析展示。新词本验证成功后再由你决定旧词本是否删除。
