@@ -34,50 +34,66 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             string resolvedNotepadId = await ResolveNotepadIdAsync(notepadId, cancellationToken);
 
             var notepad = await GetNotepadAsync(resolvedNotepadId, cancellationToken);
-            // 清理待提交副本，并在去重前处理两侧，防止 app\u0011le 被重复追加为 apple。
-            string existingContent = NotepadWordMergeHelper.RemoveInvalidControlCharacters(
-                notepad.Content, out int existingRemoved);
+            // 严格模式不改写已有正文；异常目标在计划校验中拒绝写入。
+            string existingContent = notepad.Content;
             var cleanedWords = new List<string>(eudicWords.Count);
             int incomingRemoved = 0;
-            int unsupported = 0, ambiguous = 0;
+            int unsupported = 0, ambiguous = 0, notesExcluded = 0;
             var skippedReasons = new Dictionary<string, int>();
             foreach (string word in eudicWords)
             {
                 string cleaned = NotepadWordMergeHelper.RemoveInvalidControlCharacters(word ?? "", out int removed);
                 incomingRemoved += removed;
-                var candidate = NotepadWordMergeHelper.ExtractTitle(cleaned);
+                var candidate = NotepadWordMergeHelper.ExtractIndependentTitle(cleaned);
                 if (candidate.Title != null) cleanedWords.Add(candidate.Title);
                 else
                 {
-                    if (candidate.Reason == "ambiguous_multiline") ambiguous++;
+                    if (candidate.Reason == "non_independent_record") notesExcluded++;
+                    else if (candidate.Reason == "ambiguous_multiline") ambiguous++;
                     else unsupported++;
                     string first = cleaned.Split(['\r', '\n'])[0];
-                    string reason = candidate.Reason == "ambiguous_multiline" ? candidate.Reason
+                    string reason = candidate.Reason is "ambiguous_multiline" or "non_independent_record" ? candidate.Reason
                         : first.IndexOfAny(['(', ')', '（', '）']) >= 0 ? "annotation_or_parentheses"
                         : first.IndexOfAny(['/', ',', '，', ';', '；']) >= 0 ? "multiple_title_separators"
                         : "unsupported_title";
                     skippedReasons[reason] = skippedReasons.GetValueOrDefault(reason) + 1;
                 }
             }
-            logger.LogInformation("欧路标题提取：扫描 {Scanned}，可用 {Accepted}，跳过 {Skipped}；unsupported_title={Unsupported}，ambiguous_multiline={Ambiguous}",
-                eudicWords.Count, cleanedWords.Count, unsupported + ambiguous, unsupported, ambiguous);
+            logger.LogInformation("欧路严格标题：扫描 {Scanned}，独立标题 {Accepted}，无效/歧义 {Invalid}，笔记记录排除 {NotesExcluded}",
+                eudicWords.Count, cleanedWords.Count, unsupported + ambiguous, notesExcluded);
             foreach (var skipped in skippedReasons)
                 logger.LogWarning("欧路词条跳过：reason={Reason} count={Count}", skipped.Key, skipped.Value);
 
-            if (incomingRemoved > 0 || existingRemoved > 0)
+            if (incomingRemoved > 0)
             {
                 logger.LogWarning(
-                    "墨墨待提交文本已过滤控制字符：欧路 word 字段 {IncomingRemoved} 个，已有 content 字段 {ExistingRemoved} 个；正常文本和合法换行保留",
-                    incomingRemoved, existingRemoved);
+                    "欧路 word 字段控制字符清理数量 {IncomingRemoved}", incomingRemoved);
             }
 
-            var existingLines = NotepadWordMergeHelper.SplitContentLines(existingContent);
-            var (newWords, _) = NotepadWordMergeHelper.Merge(existingLines, cleanedWords);
+            var plan = NotepadWordMergeHelper.PrepareStrictContent(existingContent, cleanedWords);
+            logger.LogInformation("严格正文校验：源唯一标题 {SourceUnique}，目标行 {Stored}，缺少 {Missing}，源外 {Extra}，重复 {Duplicates}，可更新 {Safe}",
+                plan.SourceUnique, plan.StoredTitles, plan.Missing, plan.Extra, plan.Duplicates, plan.Safe);
+            if (!plan.Safe) throw new InvalidOperationException($"严格同步拒绝改写目标：{plan.Reason}。请配置新空白词本或通过只读诊断检查目标。");
+            var newWords = plan.NewTitles;
 
             if (newWords.Count > 0)
             {
-                notepad.Content = NotepadWordMergeHelper.AppendNewTitles(existingContent, newWords);
+                notepad.Content = plan.Content;
                 await SaveNotepadAsync(resolvedNotepadId, notepad, cancellationToken);
+                var stored = await GetNotepadAsync(resolvedNotepadId, cancellationToken);
+                var verified = NotepadWordMergeHelper.PrepareStrictContent(stored.Content, cleanedWords);
+                if (!verified.Safe || verified.Missing != 0)
+                    throw new InvalidOperationException("严格同步写后 GET 校验失败：正文标题集合不一致；未重试。");
+                logger.LogInformation("严格同步写后校验通过：正文唯一标题 {Count}", verified.SourceUnique);
+                notepad = stored;
+            }
+
+            if (notepad.List != null)
+            {
+                var bodyTitles = new HashSet<string>(NotepadWordMergeHelper.SplitContentLines(notepad.Content), StringComparer.Ordinal);
+                int parsedOnly = notepad.List.Where(item => item.Type is "WORD" or "DRAFT_WORD" && item.Word != null)
+                    .Select(item => item.Word!).Distinct(StringComparer.Ordinal).Count(word => !bodyTitles.Contains(word));
+                if (parsedOnly > 0) logger.LogWarning("墨墨解析层出现正文外表达 {Count} 条；不视为程序新增，不删减正常源标题", parsedOnly);
             }
 
             await SendNotificationAsync(newWords, cancellationToken);

@@ -204,9 +204,27 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 日志默认位于 `%PROGRAMDATA%\EudicSyncToMaiMemo\logs`。GitHub Actions 与 `--sync-once` 模式同时输出到控制台。修改 Serilog `WriteTo` 可调整路径。
 
-### 临时只读墨墨诊断
+### 严格同步与新词本迁移
 
-当前额外开启 `MAIMEMO_SOURCE_AUDIT=true`，优先执行来源对照（仍仅 GET）。`source_audit` 汇总原始记录、原始完整文本重复数、当前有效唯一标题、标题重复、笔记提取标题、词本正文行和 API `list` 解析词条；`default_book_configured` 和 `target_title_matches` 分别核对默认源词本和目标名称，不输出 ID。`literal_valid_unique_titles` 是无需解析笔记即可取得的有效唯一原始标题数，供评估最简规则；`derived_only_unique_titles` 是仅依赖笔记提取的标题数。当前正式规则保持不变，是否改为仅接受完整原始标题须另行确认。
+OpenAPI 正式同步只接受完整欧路收藏记录本身就是有效标题的条目：一个收藏最多对应一个完整标题，精确、区分大小写去重；不拆短语、不生成变体，不从 Markdown、释义或多行笔记提取前缀。控制字符仍按原规则在内存中清理，不修改欧路数据。来源审计基准为 791 条原始记录、781 个有效独立唯一标题、9 条无效/歧义记录，另有 1 条笔记记录被排除（此前提取的标题已在独立收藏中存在），故严格模式总排除 10 条，目标标题数量仍是 781。源词库发生变化时以新预览为准。
+
+正式同步与只读预览共用 `ExtractIndependentTitle` / `PrepareStrictContent`。新空词本正文生成 `# 欧路词典同步` 章节头，然后每行一个完整标题，不启用 `//`。已有合法章节、换行、空行和标题只保留并追加，不重新拼接或自动删除。目标若不是章节格式，或含源外标题、重复行、无效行，会在 POST 前拒绝更新；旧词本不会被自动清空。源内新增标题在原定时计划下自动追加；欧路删除/改名导致源外行时会提示复核，不自动删除墨墨历史学习内容。
+
+迁移步骤：
+
+1. 手动在墨墨中创建新词本，例如「欧路词典同步（严格）」，保留旧词本。正文留空；若界面要求正文，**只填一行 `# 欧路词典同步`**，不填占位单词。通过官方演示/API复制新词本的完整 `np-` ID，勿使用截断显示或网页版数字 ID。
+2. 在 GitHub 编辑 `.github/workflows/sync.yml`，只把 `Run Sync` 步骤环境变量 `MaiMemo__DefaultNotepadId` 改为新 ID，提交到 `main`。该 ID 当前直接写在工作流里，不是 Secret；不要改 Token、其他 Secrets、API 路径或定时设置。诊断自动从同一文件读取目标 ID。
+3. 在 Actions → **MaiMemo Read-only Diagnostics** → **Run workflow → main** 新建运行。当前 `MAIMEMO_STRICT_PREVIEW=true` 优先于历史来源/标题审计。查看 `source=strict_preview`：`ready=1`、`extra=0`、`target_duplicates=0`、`invalid_lines=0`、`prepared_set_equal=1`。未变化源数据的新空目标应为 `unique_titles=781`、`would_add=781`、`invalid_or_ambiguous=9`、`notes_excluded=1`。`ready=0` 时按原因复核目标，不直接运行同步。
+4. 手动运行 **Sync Words → Run workflow → main** 一次。写入携带完整正文和原元数据，随后 GET 校验正文集合；失败不自动重试。再运行只读诊断，确认 `current_set_equal=1`、`missing=0`、`extra=0`、`target_duplicates=0`、`would_add=0`。第二次同步也不会重复添加。
+5. `source=parser_layer anomaly=expressions_without_body_line` 仅表示墨墨解析层的正文外表达，不表示程序新增；不能通过删除正常源标题来修正。验收以正文集合为准，同时单独查看解析展示。新词本验证成功后再由你决定旧词本是否删除。
+
+只读诊断的成功状态仅表示读取和预览已完成，`ready=0` 仍表示不允许更新。所有日志只输出计数、固定原因和状态，不输出原词、正文、完整 ID 或凭证。
+
+### 历史只读诊断模式
+
+以下为保留的历史审计说明；开启严格预览时优先执行上节模式，不改变正式严格规则。
+
+保留 `MAIMEMO_SOURCE_AUDIT=true`，关闭严格预览后执行来源对照（仍仅 GET）。`source_audit` 汇总原始记录、原始完整文本重复数、当前有效唯一标题、标题重复、笔记提取标题、词本正文行和 API `list` 解析词条；`default_book_configured` 和 `target_title_matches` 分别核对默认源词本和目标名称，不输出 ID。`literal_valid_unique_titles` 是无需解析笔记即可取得的有效唯一原始标题数，供评估最简规则；`derived_only_unique_titles` 是仅依赖笔记提取的标题数。当前正式规则保持不变，是否改为仅接受完整原始标题须另行确认。
 
 六组 `focus_*` 对应用户指定的 do with、do with sth.、boil down、boil down to、boil down to sth.、down to。`raw_exact`/`raw_trimmed_exact` 为完整原始记录匹配，`extracted_title_exact` 为实际候选标题匹配，`notes_body_mentions`/`raw_embedded_not_title` 仅为笔记或嵌入命中，不能当独立收藏；`content_line_exact` 是提交正文独立行，`parsed_word_exact` 只看 `WORD`/`DRAFT_WORD` 类型，排除章节和释义字段。大小写差异另有 `raw_casefold_exact`、`title_casefold_exact`，不会因此合并原始数据。
 
@@ -214,7 +232,7 @@ Release 由 tag `v*` 触发，产物包含 `win-x64.zip`、`linux-x64.tar.gz`、
 
 进入 **Actions → MaiMemo Read-only Diagnostics → Run workflow → main**，启动一次，在 **diagnose → Diagnose MaiMemo (GET only)** 查看结果。使用现有 `MAIMEMO_TOKEN`、`EUDIC_AUTHORIZATION`、`EUDIC_BOOK_ID` Secrets，通过 GET 读取目标词本与欧路全部分页词条。目标 ID 从现有 `sync.yml` 读取。不会调用 POST/PUT/PATCH/DELETE、运行同步或通知，也不会记录词条、笔记正文、Token、完整 ID 或上下文。此前定位 `$1` 的逐条输出开关已关闭。
 
-当前启用 `MAIMEMO_TITLE_AUDIT=true`，仅通过 GET 在内存中审计，提取与追加函数已与正式 OpenAPI 同步共用。候选允许词形中的数字、句点、Unicode 字母、组合附加符、词内连字符及撇号，完整保留短语空格；纯数字、复杂分隔符和括号不自动处理。多词且以句点结尾、无法确认是缩写的内容仍保守跳过。多行记录须有 Markdown 标题或显式笔记标题；不再对 `at a cost` 使用特殊截取规则。新增的通用行内边界限于：英文标题后 `:`/`：`/`=` 加中文释义（或 `meaning:`/`definition:`），明确的 `释义：` 等标记，以及“是一个/是一种”中文说明引导。不按第一个空格截断，不把任意中英文相邻当边界，也不回传笔记。这是保守的结构检查，仍需实际数据审计，不能证明任意纯字母短语的语义。
+历史 `MAIMEMO_TITLE_AUDIT=true` 模式用于复核旧候选规则；正式同步资格以上述严格独立标题规则为准。候选允许词形中的数字、句点、Unicode 字母、组合附加符、词内连字符及撇号，完整保留短语空格；纯数字、复杂分隔符和括号不自动处理。多词且以句点结尾、无法确认是缩写的内容仍保守跳过。多行记录须有 Markdown 标题或显式笔记标题；不再对 `at a cost` 使用特殊截取规则。新增的通用行内边界限于：英文标题后 `:`/`：`/`=` 加中文释义（或 `meaning:`/`definition:`），明确的 `释义：` 等标记，以及“是一个/是一种”中文说明引导。不按第一个空格截断，不把任意中英文相邻当边界，也不回传笔记。这是保守的结构检查，仍需实际数据审计，不能证明任意纯字母短语的语义。
 
 查看 `source=title_extraction`：`scanned` 为完整扫描条数；`syncable + skipped = scanned`；`plain`、`notes_extracted` 为可用候选分类；`ambiguous_multiline`、`unsupported_title` 为待跳过原因。`unique_titles`、`duplicate_titles` 区分词条与唯一标题，`already_present`、`would_add` 按原有逐行、区分大小写的合并规则统计。`confirmed_at_a_cost` 统计保留该短语的条数。`source=extracted_titles` 检查候选标题中是否还存在 `$1` 等字符。不会因跳过而删除墨墨已有行；未做 POST，数量不代表服务器已接受。实际截图已确认：791 条源记录中接受 782 条、跳过 9 条；其中两个标题均为 at a cost，去重后 781 个标题。3 条未能确认的句点/数字候选仍保守跳过，不等同于 3 条已确认正常词。
 

@@ -8,6 +8,55 @@ namespace EudicSyncToMaiMemo.Tests.Helpers
     /// </summary>
     public class NotepadWordMergeHelperTests
     {
+        [Theory]
+        [InlineData("at a cost", "at a cost")]
+        [InlineData("  at a cost  ", "at a cost")]
+        [InlineData("U.S.", "U.S.")]
+        [InlineData("B2B", "B2B")]
+        [InlineData("café", "café")]
+        [InlineData("at a cost 是一个常见短语：\nExample costs $1 million.", null)]
+        [InlineData("apple\n笔记：说明", null)]
+        [InlineData("# at a cost", null)]
+        [InlineData("**at a cost**", null)]
+        [InlineData("word (noun)", null)]
+        [InlineData("word/other", null)]
+        [InlineData("word, other", null)]
+        [InlineData(null, null)]
+        public void IndependentTitles_DoNotDeriveAnything(string? raw, string? expected)
+        {
+            Assert.Equal(expected, NotepadWordMergeHelper.ExtractIndependentTitle(raw).Title);
+        }
+
+        [Fact]
+        public void StrictPlan_UsesChapters_PreservesPhrases_AndIsIncremental()
+        {
+            var initial = NotepadWordMergeHelper.PrepareStrictContent("", ["at a cost", "B2B", "at a cost"]);
+            Assert.True(initial.Safe);
+            Assert.Equal("# 欧路词典同步\nat a cost\nB2B", initial.Content);
+            Assert.Equal(2, initial.NewTitles.Count);
+            var again = NotepadWordMergeHelper.PrepareStrictContent(initial.Content, ["at a cost", "B2B"]);
+            Assert.True(again.Safe);
+            Assert.Equal(0, again.Missing);
+            Assert.Empty(again.NewTitles);
+            Assert.Equal(initial.Content, again.Content);
+            var extended = NotepadWordMergeHelper.PrepareStrictContent(initial.Content, ["at a cost", "B2B", "At a cost"]);
+            Assert.Equal(initial.Content + "\nAt a cost", extended.Content); // 精确、区分大小写，不生成或合并变体。
+        }
+
+        [Theory]
+        [InlineData("apple", "target_not_chapter_mode")]
+        [InlineData("//\napple", "target_not_chapter_mode")]
+        [InlineData("# old\nold-word", "target_contains_non_source_titles")]
+        [InlineData("# old\napple\napple", "target_contains_duplicates")]
+        public void StrictPlan_RefusesToRewriteOldOrContaminatedTargets(string existing, string reason)
+        {
+            var plan = NotepadWordMergeHelper.PrepareStrictContent(existing, ["apple"]);
+            Assert.False(plan.Safe);
+            Assert.Equal(reason, plan.Reason);
+            Assert.Equal(existing, plan.Content);
+            Assert.Empty(plan.NewTitles);
+        }
+
         [Fact]
         public void Merge_WithNewWords_ReturnsFilteredAndCombined()
         {

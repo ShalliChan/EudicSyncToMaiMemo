@@ -389,6 +389,39 @@ function Write-EudicSourceAudit {
     }
 }
 
+function Write-StrictSyncPreview {
+    param([string[]]$Words, $Notepad, [scriptblock]$WriteLog)
+    $titles = [Collections.Generic.List[string]]::new()
+    $invalid = 0; $notes = 0
+    foreach ($word in $Words) {
+        $removed = 0
+        $cleaned = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::RemoveInvalidControlCharacters($word, [ref]$removed)
+        $candidate = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::ExtractIndependentTitle($cleaned)
+        if ($null -ne $candidate.Title) { $titles.Add($candidate.Title) }
+        elseif ($candidate.Reason -eq 'non_independent_record') { $notes++ }
+        else { $invalid++ }
+    }
+    $plan = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::PrepareStrictContent($Notepad.content, $titles)
+    $prepared = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::PrepareStrictContent($plan.Content, $titles)
+    $metrics = @{ scanned = $Words.Count; accepted_records = $titles.Count; unique_titles = $plan.SourceUnique;
+        invalid_or_ambiguous = $invalid; notes_excluded = $notes; total_excluded = $invalid + $notes;
+        source_duplicates = $titles.Count - $plan.SourceUnique; target_titles = $plan.StoredTitles; missing = $plan.Missing;
+        extra = $plan.Extra; target_duplicates = $plan.Duplicates; invalid_lines = $plan.InvalidLines;
+        target_chapter_mode = [int]$plan.ChapterMode; ready = [int]$plan.Safe; would_add = $plan.NewTitles.Count;
+        current_set_equal = [int]($plan.Safe -and $plan.Missing -eq 0);
+        prepared_set_equal = [int]($plan.Safe -and $prepared.Safe -and $prepared.Missing -eq 0);
+        prepared_missing = $prepared.Missing; prepared_extra = $prepared.Extra }
+    foreach ($key in ($metrics.Keys | Sort-Object)) { & $WriteLog "source=strict_preview anomaly=$key codepoints=none count=$($metrics[$key])" }
+    & $WriteLog "source=strict_preview anomaly=$($plan.Reason) codepoints=none count=1"
+    if ($Notepad.list -is [array]) {
+        $body = [Collections.Generic.HashSet[string]]::new([string[]][EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::SplitContentLines($Notepad.content), [StringComparer]::Ordinal)
+        $parsed = @($Notepad.list | Where-Object { $_.type -cin @('WORD', 'DRAFT_WORD') -and $_.word -is [string] } | ForEach-Object { $_.word } | Sort-Object -Unique -CaseSensitive)
+        $parsedOnly = @($parsed | Where-Object { !$body.Contains($_) }).Count
+        & $WriteLog "source=parser_layer anomaly=expressions_without_body_line codepoints=none count=$parsedOnly"
+    }
+    # 只读预览可成功报告被阻止的旧目标；ready=0 不代表可以更新。
+}
+
 function Invoke-MaiMemoContentAudit {
     param(
         [string]$Token,
@@ -397,6 +430,7 @@ function Invoke-MaiMemoContentAudit {
         [switch]$LocateLiteralDollarOne,
         [switch]$TitleAudit,
         [switch]$SourceAudit,
+        [switch]$StrictPreview,
         [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
@@ -478,6 +512,10 @@ function Invoke-MaiMemoContentAudit {
         return 1
     }
 
+    if ($StrictPreview) {
+        Write-StrictSyncPreview $words.ToArray() $notepad $WriteLog
+        return 0
+    }
     if ($SourceAudit) {
         Write-EudicSourceAudit $words.ToArray() $notepad $ignored $WriteLog -IsDefaultBook ($EudicBookId -ceq '0')
         return 0
@@ -532,7 +570,7 @@ function Invoke-MaiMemoContentAudit {
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($env:MAIMEMO_CONTENT_AUDIT -eq 'true') {
-            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true') -SourceAudit:($env:MAIMEMO_SOURCE_AUDIT -eq 'true'))
+            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true') -SourceAudit:($env:MAIMEMO_SOURCE_AUDIT -eq 'true') -StrictPreview:($env:MAIMEMO_STRICT_PREVIEW -eq 'true'))
         }
         exit (Invoke-MaiMemoReadOnlyDiagnostic -Token $env:MAIMEMO_TOKEN)
     }

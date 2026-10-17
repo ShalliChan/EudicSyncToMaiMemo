@@ -7,6 +7,62 @@ namespace EudicSyncToMaiMemo.Services.Helpers
     public static class NotepadWordMergeHelper
     {
         private static readonly string[] LineSeparators = ["\r\n", "\n"];
+        public const string StrictChapter = "# 欧路词典同步";
+
+        /// <summary>只接受完整独立收藏；笔记解析出的前缀不获得同步资格。</summary>
+        public static TitleCandidate ExtractIndependentTitle(string? word)
+        {
+            string original = (word ?? "").Trim();
+            var candidate = ExtractTitle(original);
+            return candidate.Title != null && !string.Equals(candidate.Title, original, StringComparison.Ordinal)
+                ? new(null, "non_independent_record") : candidate;
+        }
+
+        public sealed class StrictPlan
+        {
+            public bool Safe { get; set; }
+            public string Reason { get; set; } = "ready";
+            public string Content { get; set; } = "";
+            public List<string> NewTitles { get; set; } = [];
+            public int SourceUnique { get; set; }
+            public int StoredTitles { get; set; }
+            public int Missing { get; set; }
+            public int Extra { get; set; }
+            public int Duplicates { get; set; }
+            public int InvalidLines { get; set; }
+            public bool ChapterMode { get; set; }
+        }
+
+        /// <summary>只制定追加计划；源外行、重复行或非章节旧词本必须人工处理，绝不自动删除。</summary>
+        public static StrictPlan PrepareStrictContent(string content, IReadOnlyList<string> sourceTitles)
+        {
+            var source = new HashSet<string>(sourceTitles, StringComparer.Ordinal);
+            var stored = new HashSet<string>(StringComparer.Ordinal);
+            var plan = new StrictPlan { Content = content, SourceUnique = source.Count, ChapterMode = content.StartsWith('#') };
+            bool empty = string.IsNullOrWhiteSpace(content);
+            foreach (string line in SplitContentLines(content))
+            {
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+                plan.StoredTitles++;
+                if (!stored.Add(line)) plan.Duplicates++;
+                var candidate = ExtractIndependentTitle(line);
+                if (candidate.Title == null || !string.Equals(candidate.Title, line, StringComparison.Ordinal)) plan.InvalidLines++;
+            }
+            plan.Missing = source.Except(stored, StringComparer.Ordinal).Count();
+            plan.Extra = stored.Except(source, StringComparer.Ordinal).Count();
+            plan.Safe = (empty || plan.ChapterMode) && plan.Extra == 0 && plan.Duplicates == 0 && plan.InvalidLines == 0;
+            if (!plan.Safe)
+            {
+                plan.Reason = !empty && !plan.ChapterMode ? "target_not_chapter_mode"
+                    : plan.Extra > 0 ? "target_contains_non_source_titles"
+                    : plan.Duplicates > 0 ? "target_contains_duplicates" : "target_invalid_lines";
+                return plan;
+            }
+            plan.NewTitles = sourceTitles.Except(stored, StringComparer.Ordinal).ToList();
+            if (plan.NewTitles.Count > 0)
+                plan.Content = AppendNewTitles(empty ? StrictChapter : content, plan.NewTitles);
+            return plan;
+        }
 
         public sealed class TitleCandidate(string? title, string reason)
         {
