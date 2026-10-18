@@ -1,0 +1,50 @@
+name: MaiMemo OAuth Verification (two runners)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maimemo-user-authorization
+  cancel-in-progress: false
+
+jobs:
+  first-runner:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned OAuth dependency
+        working-directory: scripts/maimemo-oauth
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Refresh and verify strict notebook (GET only)
+        run: node scripts/maimemo-oauth/verify.mjs
+        env:
+          MAIMEMO_OIDC_CREDENTIALS: ${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}
+
+  second-runner:
+    needs: first-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned OAuth dependency
+        working-directory: scripts/maimemo-oauth
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Refresh same original credential and verify strict notebook (GET only)
+        run: node scripts/maimemo-oauth/verify.mjs
+        env:
+          MAIMEMO_OIDC_CREDENTIALS: ${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}

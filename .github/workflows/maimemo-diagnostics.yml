@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: maimemo-user-authorization
+  cancel-in-progress: false
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest

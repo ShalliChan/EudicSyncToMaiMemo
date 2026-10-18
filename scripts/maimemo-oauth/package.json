@@ -1,0 +1,8 @@
+{
+  "name": "eudic-maimemo-oauth-verification",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test verify.test.mjs" },
+  "dependencies": { "openid-client": "6.8.4" },
+  "engines": { "node": ">=22" }
+}
