@@ -27,6 +27,7 @@ async function scenario({ tokens = { access_token: at }, refreshError, fetchErro
         assert.equal(options.method, 'GET');
         assert.equal(options.redirect, 'error');
         assert.equal(options.headers.Authorization, `Bearer ${at}`);
+        assert.equal(options.headers['Content-Type'], 'application/json');
         assert.equal(options.body, undefined);
         if (fetchError) throw fetchError;
         return { ok: status === 200, status, json: async () => responseBody };
@@ -106,15 +107,32 @@ test('target uses existing sync configuration; ambiguity fails closed', () => {
   assert.throws(() => targetFromWorkflow(`MaiMemo__DefaultNotepadId: ${target}\nMaiMemo__DefaultNotepadId: ${target}`));
   assert.ok(targetFromWorkflow(readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8')).startsWith('np-'));
 });
-test('verification workflow requires two sequential jobs without credential outputs/artifacts', () => {
+test('verification workflow requires preflight then two sequential jobs without credential outputs/artifacts', () => {
   const yaml = readFileSync(new URL('../../.github/workflows/maimemo-oauth-verify.yml', import.meta.url), 'utf8');
   assert.match(yaml, /needs: first-runner/);
-  assert.equal((yaml.match(/runs-on: ubuntu-latest/g) ?? []).length, 2);
-  assert.equal((yaml.match(/secrets\.MAIMEMO_OIDC_CREDENTIALS/g) ?? []).length, 2);
+  assert.match(yaml, /needs: preflight/);
+  assert.equal((yaml.match(/runs-on: ubuntu-latest/g) ?? []).length, 3);
+  assert.equal((yaml.match(/secrets\.MAIMEMO_OIDC_CREDENTIALS/g) ?? []).length, 3);
   assert.ok(!/upload-artifact|GITHUB_OUTPUT|GITHUB_ENV|sync-once|schedule:/.test(yaml));
   for (const file of ['sync.yml', 'maimemo-diagnostics.yml', 'prepare-strict-notepad.yml', 'maimemo-oauth-verify.yml']) {
     const value = readFileSync(new URL(`../../.github/workflows/${file}`, import.meta.url), 'utf8');
     assert.match(value, /group: maimemo-user-authorization/);
     assert.match(value, /cancel-in-progress: false/);
   }
+});
+
+test('published official CLI 1.3.1 matches refresh client, endpoint and Bearer format', () => {
+  const base = new URL('./node_modules/@maimemo/memo-api/', import.meta.url);
+  const pkg = JSON.parse(readFileSync(new URL('package.json', base), 'utf8'));
+  assert.equal(pkg.version, '1.3.1');
+  const oidc = readFileSync(new URL('dist/lib/oidc.js', base), 'utf8');
+  assert.match(oidc, /6a2157c1fa31b7c875a8e4ba/);
+  assert.match(oidc, /https:\/\/accounts\.maimemo\.com\/oidc/);
+  assert.match(oidc, /client\.refreshTokenGrant\(oidcConfig, rt\)/);
+  const notepad = readFileSync(new URL('dist/commands/notepad.js', base), 'utf8');
+  assert.ok(notepad.includes('`/api/v1/memo/notepads/${argv.id}`'));
+  const client = readFileSync(new URL('dist/client.js', base), 'utf8');
+  assert.ok(client.includes('https://open.maimemo.com/open/'));
+  assert.ok(client.includes('Authorization: `Bearer ${token}`'));
+  assert.ok(client.includes('"Content-Type": "application/json"'));
 });

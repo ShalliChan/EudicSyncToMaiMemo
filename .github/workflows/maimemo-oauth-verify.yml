@@ -1,4 +1,4 @@
-name: MaiMemo OAuth Verification (two runners)
+name: MaiMemo OAuth Verification (preflight + two runners)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  first-runner:
+  preflight:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -22,10 +22,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned OAuth dependency
+      - name: Install official CLI 1.3.1 and pinned OAuth dependency
         working-directory: scripts/maimemo-oauth
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test official CLI compatibility and verification safeguards
+        working-directory: scripts/maimemo-oauth
+        run: npm test
       - name: Refresh and verify strict notebook (GET only)
+        run: node scripts/maimemo-oauth/verify.mjs
+        env:
+          MAIMEMO_OIDC_CREDENTIALS: ${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}
+
+  first-runner:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install official CLI 1.3.1 and pinned OAuth dependency
+        working-directory: scripts/maimemo-oauth
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Refresh same original credential and verify strict notebook (GET only)
         run: node scripts/maimemo-oauth/verify.mjs
         env:
           MAIMEMO_OIDC_CREDENTIALS: ${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}
@@ -41,7 +63,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned OAuth dependency
+      - name: Install official CLI 1.3.1 and pinned OAuth dependency
         working-directory: scripts/maimemo-oauth
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Refresh same original credential and verify strict notebook (GET only)

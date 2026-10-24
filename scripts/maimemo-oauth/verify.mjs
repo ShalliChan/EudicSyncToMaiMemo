@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-// Match the official memo-api CLI's public OIDC client. No client secret is used.
+// Match @maimemo/memo-api 1.3.1's public OIDC client and resource requests.
+// Keep refresh in memory: the CLI's own refresh writes a config file and drops
+// returned refresh tokens, preventing our required rotation detection.
 export const issuer = 'https://accounts.maimemo.com/oidc';
 export const clientId = '6a2157c1fa31b7c875a8e4ba';
 class SafeFailure extends Error {}
@@ -58,7 +60,7 @@ export async function verify({ credentials, target, refresh = officialRefresh,
   try {
     response = await fetchResource(`https://open.maimemo.com/open/api/v1/memo/notepads/${encodeURIComponent(target)}`, {
       method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30000),
-      headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json' }
+      headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json', 'Content-Type': 'application/json' }
     });
     log(`phase=target_get http_status=${response.status}`);
     body = await response.json();
