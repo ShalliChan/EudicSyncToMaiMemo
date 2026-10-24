@@ -1,8 +1,8 @@
-# MaiMemo OAuth staged rollout
+# MaiMemo OAuth authentication
 
-Stage 1 adds only credential import and a manual preflight plus two-runner verification workflow.
-`Sync Words` and the existing diagnostics still use `MAIMEMO_TOKEN` as before.
-No automatic switch or real sync is performed by the verification workflow.
+`Sync Words` defaults to OAuth for daily and manual runs. The read-only diagnostics
+also refresh OAuth credentials. The separate verification workflow never runs sync.
+No Secrets are updated automatically.
 
 ## Windows initial authorization
 
@@ -64,32 +64,42 @@ The official CLI records a 90-day local refresh expiry and currently retains the
 same refresh token. Do not reset that expiry on daily refresh. Real server policy
 and cross-runner reuse must be verified, not inferred from mocked tests.
 
-Only after all three real jobs pass and the user confirms should a later change connect refreshed access
-tokens to the existing .NET process via its private `MaiMemo__Token` environment.
+After three successful independent checks and explicit user confirmation, the
+workflow passes refreshed access tokens through the .NET child process environment.
 Never use command-line tokens, `$GITHUB_OUTPUT`, caches, or artifacts for credentials.
 All workflows that use this authorization share one concurrency group and do not
 cancel active runs. Local use of the same grant should not overlap cloud tests.
 No automatic token persistence is implemented: rotation deliberately stops rollout.
 
-## Prepared rollout (not enabled)
+## Enabled workflow and manual fallback
 
 Run 40079120393 on commit 4eb5d33 passed preflight and two further independent
 runners. All three refreshed the original Secret, reported no rotation and GET
 200 with the strict target identity matching. No sync or credential writes ran.
 
-`run-sync.mjs` is prepared and unit-tested with a mocked .NET launcher only.
-No workflow invokes it. It requires `MAIMEMO_OAUTH_SYNC_CONFIRMED=true`, verifies
+`run-sync.mjs` is covered by unit tests with mocked process launchers. The formal
+workflow invokes it with `MAIMEMO_OAUTH_SYNC_CONFIRMED=true`. It verifies
 the configured target, refreshes and GET-verifies the notebook before starting
 the same existing .NET command. Access tokens travel only through the child
 environment; refresh credentials are excluded. OAuth failures stop the run rather
 than silently using the fixed token.
 
-After explicit user confirmation, the minimal workflow change is to install the
-locked Node dependencies and replace the Run Sync command with this wrapper,
-passing `MAIMEMO_OIDC_CREDENTIALS` and the explicit rollout flag. All business
-configuration, notebook ID and daily schedule remain unchanged. Retain the old
-fixed-token Secret and offer an explicit manual fixed-token choice for fallback;
-do not select fallback automatically on OAuth failures.
+The workflow installs the locked CLI 1.3.1 and OAuth dependencies and uses the
+existing `MAIMEMO_OIDC_CREDENTIALS`. Business logic, target ID and the 09:05 Beijing
+daily schedule remain unchanged. In Actions -> Sync Words -> Run workflow,
+`authentication=oauth` is the default; choose `fixed` explicitly only for manual
+fallback. That branch alone receives the existing `MAIMEMO_TOKEN`. OAuth failure
+never starts the fallback branch. Secrets remain unchanged.
+
+The diagnostics workflow uses `run-sync.mjs --diagnose`, which launches only the
+existing PowerShell GET audit with its refreshed access token in the child
+environment. It never invokes .NET sync. Both workflows share the authorization
+concurrency group. No diagnostics or sync run writes new refresh credentials.
+
+When the refresh grant expires or is revoked, repeat the Windows login and import.
+The current local expiry remains 90 days from initial login, not from each refresh.
+If no titles are new, sync intentionally sends no update request: success then
+verifies read access and idempotence, but is not a real write-permission test.
 
 Official references:
 - https://github.com/maimemo/memo-api-cli/blob/main/src/lib/oidc.ts

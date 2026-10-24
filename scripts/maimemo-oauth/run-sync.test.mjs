@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { runSync } from './run-sync.mjs';
+import { runSync, runDiagnostics } from './run-sync.mjs';
 
 const env = () => ({ MAIMEMO_OAUTH_SYNC_CONFIRMED: 'true', MaiMemo__DefaultNotepadId: 'np-fixture',
   MAIMEMO_OIDC_CREDENTIALS: 'private-refresh', MaiMemo__Token: 'old-fixed', MAIMEMO_API_TOKEN: 'old-alias',
@@ -45,9 +45,37 @@ test('nonzero sync exit status propagates', async () => {
 test('launch failure is sanitized', async () => {
   await assert.rejects(runSync({ env: env(), configuredTarget, getToken: async () => 'fixture', launch: () => ({ error: new Error('private'), status: null }) }), /sync_process_failed/);
 });
-test('formal workflow is still fixed-token; no workflow activates prepared wrapper', () => {
+test('formal workflow defaults to OAuth with explicit fixed-token fallback, never on failure', () => {
   const sync = readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8');
-  assert.ok(sync.includes('MaiMemo__Token: ${{ secrets.MAIMEMO_TOKEN }}'));
-  assert.ok(!sync.includes('run-sync.mjs'));
-  assert.ok(!sync.includes('MAIMEMO_OAUTH_SYNC_CONFIRMED'));
+  assert.ok(sync.includes('default: oauth'));
+  assert.ok(sync.includes("inputs.authentication || 'oauth'"));
+  assert.ok(sync.includes("inputs.authentication == 'fixed' && secrets.MAIMEMO_TOKEN || ''"));
+  assert.ok(sync.includes('MAIMEMO_OAUTH_SYNC_CONFIRMED:'));
+  assert.ok(sync.includes('node scripts/maimemo-oauth/run-sync.mjs'));
+  assert.ok(!sync.includes('continue-on-error') && !/\|\|\s*dotnet/.test(sync));
+  assert.ok(sync.includes("cron: '5 1 * * *'"));
+  assert.ok(sync.includes('group: maimemo-user-authorization'));
+});
+test('OAuth read-only diagnostics pass access token via private child environment only', async () => {
+  const code = await runDiagnostics({ env: { ...env(), MAIMEMO_STRICT_PREVIEW: 'true' }, getToken: async () => 'new-access',
+    launch: (command, args, options) => {
+      assert.equal(command, 'pwsh');
+      assert.ok(args.at(-1).endsWith('diagnose-maimemo.ps1'));
+      assert.ok(!args.join(' ').includes('new-access'));
+      assert.equal(options.env.MAIMEMO_TOKEN, 'new-access');
+      assert.equal(options.env.MAIMEMO_OIDC_CREDENTIALS, undefined);
+      assert.equal(options.env.MaiMemo__Token, undefined);
+      assert.equal(options.env.MAIMEMO_STRICT_PREVIEW, 'true');
+      return { status: 0 };
+    } });
+  assert.equal(code, 0);
+});
+test('diagnostics do not launch after OAuth failure', async () => {
+  await assert.rejects(runDiagnostics({ env: {}, getToken: async () => { throw new Error('invalid_grant'); }, launch: () => assert.fail() }), /invalid_grant/);
+});
+test('diagnostic workflow uses OAuth while retaining read-only script', () => {
+  const yaml = readFileSync(new URL('../../.github/workflows/maimemo-diagnostics.yml', import.meta.url), 'utf8');
+  assert.ok(yaml.includes('run-sync.mjs --diagnose'));
+  assert.ok(yaml.includes('secrets.MAIMEMO_OIDC_CREDENTIALS'));
+  assert.ok(!yaml.includes('secrets.MAIMEMO_TOKEN'));
 });

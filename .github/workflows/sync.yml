@@ -5,6 +5,17 @@ on:
     # UTC 01:05 = 北京时间 09:05，避开整点。
     - cron: '5 1 * * *'
   workflow_dispatch:
+    inputs:
+      authentication:
+        description: 'oauth normally; fixed only for explicit manual fallback'
+        type: choice
+        options:
+          - oauth
+          - fixed
+        default: oauth
+
+permissions:
+  contents: read
 
 concurrency:
   group: maimemo-user-authorization
@@ -12,6 +23,7 @@ concurrency:
 
 jobs:
   sync:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -24,13 +36,33 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'ga'
 
+      - uses: actions/setup-node@v4
+        if: inputs.authentication != 'fixed'
+        with:
+          node-version: '22'
+      - name: Install pinned OAuth dependencies
+        if: inputs.authentication != 'fixed'
+        working-directory: scripts/maimemo-oauth
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run Sync
-        run: dotnet run --project src/EudicSyncToMaiMemo/EudicSyncToMaiMemo.csproj --configuration Release -- --sync-once
+        shell: bash
+        run: |
+          if [ "$MAIMEMO_AUTH_MODE" = "oauth" ]; then
+            node scripts/maimemo-oauth/run-sync.mjs
+          elif [ "$MAIMEMO_AUTH_MODE" = "fixed" ]; then
+            dotnet run --project src/EudicSyncToMaiMemo/EudicSyncToMaiMemo.csproj --configuration Release -- --sync-once
+          else
+            echo 'authentication_mode_invalid'
+            exit 1
+          fi
         env:
+          MAIMEMO_AUTH_MODE: ${{ inputs.authentication || 'oauth' }}
+          MAIMEMO_OAUTH_SYNC_CONFIRMED: 'true'
+          MAIMEMO_OIDC_CREDENTIALS: ${{ inputs.authentication != 'fixed' && secrets.MAIMEMO_OIDC_CREDENTIALS || '' }}
           Eudic__Authorization: ${{ secrets.EUDIC_AUTHORIZATION }}
           Eudic__DefaultBookId: ${{ secrets.EUDIC_BOOK_ID }}
           MaiMemo__Provider: OpenApi
-          MaiMemo__Token: ${{ secrets.MAIMEMO_TOKEN }}
+          MaiMemo__Token: ${{ inputs.authentication == 'fixed' && secrets.MAIMEMO_TOKEN || '' }}
           MaiMemo__DefaultNotepadId: "np-PqBtKGw4-gKpQeQdME2IweQ0U-Ml7a8wRB2RwMcm52qpRYqOCI4TkyQisKTH2Jg_"
           Notification__Enabled: ${{ secrets.NOTIFICATION_ENABLED }}
           Notification__Url: ${{ secrets.NOTIFICATION_URL }}

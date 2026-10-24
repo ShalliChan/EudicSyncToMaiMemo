@@ -21,11 +21,16 @@ jobs:
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned OAuth dependencies
+        working-directory: scripts/maimemo-oauth
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Diagnose MaiMemo (GET only)
-        shell: pwsh
-        run: ./scripts/diagnose-maimemo.ps1
+        run: node scripts/maimemo-oauth/run-sync.mjs --diagnose
         env:
-          MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
+          MAIMEMO_OIDC_CREDENTIALS: ${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}
           MAIMEMO_CONTENT_AUDIT: 'true'
           MAIMEMO_DIFFERENCE_AUDIT: ${{ inputs.difference_audit }}
           MAIMEMO_STRICT_PREVIEW: 'true'
