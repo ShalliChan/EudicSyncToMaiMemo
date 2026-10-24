@@ -71,6 +71,26 @@ All workflows that use this authorization share one concurrency group and do not
 cancel active runs. Local use of the same grant should not overlap cloud tests.
 No automatic token persistence is implemented: rotation deliberately stops rollout.
 
+## Prepared rollout (not enabled)
+
+Run 40079120393 on commit 4eb5d33 passed preflight and two further independent
+runners. All three refreshed the original Secret, reported no rotation and GET
+200 with the strict target identity matching. No sync or credential writes ran.
+
+`run-sync.mjs` is prepared and unit-tested with a mocked .NET launcher only.
+No workflow invokes it. It requires `MAIMEMO_OAUTH_SYNC_CONFIRMED=true`, verifies
+the configured target, refreshes and GET-verifies the notebook before starting
+the same existing .NET command. Access tokens travel only through the child
+environment; refresh credentials are excluded. OAuth failures stop the run rather
+than silently using the fixed token.
+
+After explicit user confirmation, the minimal workflow change is to install the
+locked Node dependencies and replace the Run Sync command with this wrapper,
+passing `MAIMEMO_OIDC_CREDENTIALS` and the explicit rollout flag. All business
+configuration, notebook ID and daily schedule remain unchanged. Retain the old
+fixed-token Secret and offer an explicit manual fixed-token choice for fallback;
+do not select fallback automatically on OAuth failures.
+
 Official references:
 - https://github.com/maimemo/memo-api-cli/blob/main/src/lib/oidc.ts
 - https://github.com/maimemo/memo-api-cli/blob/main/src/lib/auth.ts

@@ -73,9 +73,10 @@ export async function verify({ credentials, target, refresh = officialRefresh,
       || typeof notepad?.content !== 'string') fail('target_identity_or_shape_mismatch');
   log('phase=target_get target_match=1 strict_target=1');
   log('verification_passed=1 sync_executed=0 credentials_persisted=0');
+  return tokens.access_token;
 }
 
-export async function main(env = process.env, log = console.log) {
+export async function authorize(env = process.env, log = console.log) {
   const credentials = env.MAIMEMO_OIDC_CREDENTIALS;
   delete env.MAIMEMO_OIDC_CREDENTIALS;
   if (!credentials) fail('credentials_missing');
@@ -85,12 +86,21 @@ export async function main(env = process.env, log = console.log) {
       log(`::add-mask::${value.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')}`);
     }
   };
-  await verify({ credentials, target, log, mask });
+  return verify({ credentials, target, log, mask });
+}
+
+export function safeFailureCode(error) {
+  return error instanceof SafeFailure ? error.message : 'internal_error';
+}
+
+// Preserve the read-only entry point: never expose the returned token as output.
+export async function main(env = process.env, log = console.log) {
+  await authorize(env, log);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(error => {
-    console.error(`oauth_verification_failed=${error instanceof SafeFailure ? error.message : 'internal_error'}`);
+    console.error(`oauth_verification_failed=${safeFailureCode(error)}`);
     process.exitCode = 1;
   });
 }

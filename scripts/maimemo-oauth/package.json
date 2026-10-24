@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test verify.test.mjs"
+    "test": "node --test verify.test.mjs run-sync.test.mjs"
   },
   "dependencies": {
     "@maimemo/memo-api": "1.3.1",
