@@ -46,7 +46,8 @@ namespace EudicSyncToMaiMemo.Tests.Helpers
         [Theory]
         [InlineData("apple", "target_not_chapter_mode")]
         [InlineData("//\napple", "target_not_chapter_mode")]
-        [InlineData("# old\nold-word", "target_contains_non_source_titles")]
+        [InlineData("# old\nold/word", "target_invalid_lines")]
+        [InlineData("#\napple", "target_invalid_lines")]
         [InlineData("# old\napple\napple", "target_contains_duplicates")]
         public void StrictPlan_RefusesToRewriteOldOrContaminatedTargets(string existing, string reason)
         {
@@ -55,6 +56,42 @@ namespace EudicSyncToMaiMemo.Tests.Helpers
             Assert.Equal(reason, plan.Reason);
             Assert.Equal(existing, plan.Content);
             Assert.Empty(plan.NewTitles);
+        }
+
+        [Fact]
+        public void StrictPlan_PreservesAll795TitlesAndChapters_WhenSourceDeletesOrAdds()
+        {
+            var oldTitles = Enumerable.Range(0, 792).Select(i => $"word{i}")
+                .Concat(["approach", "Harvard", "podcast"]).ToArray();
+            string original = "# 第一章\r\n" + string.Join("\r\n", oldTitles.Take(400))
+                + "\r\n\r\n# 第二章\r\n" + string.Join("\r\n", oldTitles.Skip(400));
+            var source = oldTitles.Take(792).Concat(["bits and bobs", "vinyl records", "zig-zag", "zig-zag"]).ToArray();
+            var plan = NotepadWordMergeHelper.PrepareStrictContent(original, source);
+            Assert.True(plan.Safe);
+            Assert.Equal(3, plan.Extra);
+            Assert.Equal(795, plan.StoredTitles);
+            Assert.Equal(3, plan.NewTitles.Count);
+            Assert.StartsWith(original, plan.Content);
+            Assert.True(NotepadWordMergeHelper.VerifyStrictAppend(original, plan, plan.Content, source));
+            var again = NotepadWordMergeHelper.PrepareStrictContent(plan.Content, source);
+            Assert.True(again.Safe);
+            Assert.Empty(again.NewTitles);
+            Assert.Equal(798, again.StoredTitles);
+            Assert.Equal(plan.Content, again.Content);
+            Assert.True(NotepadWordMergeHelper.PrepareStrictContent(plan.Content, []).Safe);
+        }
+
+        [Theory]
+        [InlineData("# old\napple\nbanana")]
+        [InlineData("# old\napproach\napple\nbanana\nunexpected")]
+        [InlineData("# old\napproach\napple\nbanana\nbanana")]
+        [InlineData("# changed\napproach\napple\nbanana")]
+        [InlineData("# old\r\napproach\r\napple\r\nbanana")]
+        public void StrictAppend_RejectsLostRetainedTitles_UnexpectedWords_Duplicates_AndReformatting(string actual)
+        {
+            const string original = "# old\napproach\napple";
+            var plan = NotepadWordMergeHelper.PrepareStrictContent(original, ["apple", "banana"]);
+            Assert.False(NotepadWordMergeHelper.VerifyStrictAppend(original, plan, actual, ["apple", "banana"]));
         }
 
         [Fact]

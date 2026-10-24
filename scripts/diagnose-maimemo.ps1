@@ -477,6 +477,12 @@ function Write-StrictSyncPreview {
         current_set_equal = [int]($plan.Safe -and $plan.Missing -eq 0);
         prepared_set_equal = [int]($plan.Safe -and $prepared.Safe -and $prepared.Missing -eq 0);
         prepared_missing = $prepared.Missing; prepared_extra = $prepared.Extra }
+    $metrics.original_content_preserved = [int]$plan.Content.StartsWith($Notepad.content, [StringComparison]::Ordinal)
+    $metrics.prepared_union_equal = [int][EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]::VerifyStrictAppend($Notepad.content, $plan, $plan.Content, $titles)
+    $metrics.second_merge_additions = $prepared.NewTitles.Count
+    $metrics.prepared_total_titles = $prepared.StoredTitles
+    # Under additive policy, set equality means equality to original titles UNION source.
+    $metrics.prepared_set_equal = $metrics.prepared_union_equal
     foreach ($key in ($metrics.Keys | Sort-Object)) { & $WriteLog "source=strict_preview anomaly=$key codepoints=none count=$($metrics[$key])" }
     & $WriteLog "source=strict_preview anomaly=$($plan.Reason) codepoints=none count=1"
     if ($Notepad.list -is [array]) {

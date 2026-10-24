@@ -269,6 +269,23 @@ try {
         'source=strict_preview anomaly=ready codepoints=none count=0',
         'source=strict_preview anomaly=target_not_chapter_mode codepoints=none count=1'
     ) -StrictPreview
+    Test-ContentAudit @((New-TestResponse -Payload @{ data = @{ notepad = @{
+        id = $target; content = "# retained`napproach`nHarvard`npodcast`napple"
+    } } }), (New-TestResponse -Payload @{ data = @(@{ word = 'apple' }, @{ word = 'banana' }, @{ word = 'banana' }) })) @(
+        'source=strict_preview anomaly=ready codepoints=none count=1',
+        'source=strict_preview anomaly=extra codepoints=none count=3',
+        'source=strict_preview anomaly=would_add codepoints=none count=1',
+        'source=strict_preview anomaly=original_content_preserved codepoints=none count=1',
+        'source=strict_preview anomaly=prepared_union_equal codepoints=none count=1',
+        'source=strict_preview anomaly=prepared_total_titles codepoints=none count=5',
+        'source=strict_preview anomaly=second_merge_additions codepoints=none count=0'
+    ) -StrictPreview
+    Test-ContentAudit @((New-TestResponse -Payload @{ data = @{ notepad = @{
+        id = $target; content = "# retained`napproach`napproach"
+    } } }), (New-TestResponse -Payload @{ data = @(@{ word = 'banana' }) })) @(
+        'source=strict_preview anomaly=ready codepoints=none count=0',
+        'source=strict_preview anomaly=target_contains_duplicates codepoints=none count=1'
+    ) -StrictPreview
     $sourceNotepad = New-TestResponse -Payload @{ data = @{ notepad = @{
         id = $target; content = "do with`nboil down to`nlegacy";
         list = @(@{ type = 'WORD'; word = 'do with' }, @{ type = 'WORD'; word = 'boil down to' },

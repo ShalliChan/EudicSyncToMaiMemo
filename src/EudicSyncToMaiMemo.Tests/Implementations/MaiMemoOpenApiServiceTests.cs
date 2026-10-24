@@ -277,6 +277,47 @@ public class MaiMemoOpenApiServiceTests
         http.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public async Task AdditiveSync_RetainsRemovedSourceTitles_AndRepeatedRunDoesNotWrite()
+    {
+        string url = $"{NotepadsUrl}/np-test";
+        string original = "# 第一章\r\napproach\r\nHarvard\r\n\r\n# 第二章\r\npodcast\r\napple";
+        string saved = original;
+        var http = new Mock<IHttpHelper>(MockBehavior.Strict);
+        http.Setup(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .ReturnsAsync(() => NotepadResponse("np-test", saved));
+        http.Setup(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .Callback<string, string, Dictionary<string, string>?, CancellationToken>((_, json, _, _) =>
+                saved = JObject.Parse(json)["notepad"]!["content"]!.Value<string>()!)
+            .ReturnsAsync(() => NotepadResponse("np-test", saved));
+        var service = CreateService(http.Object, new MaiMemoOptions { Token = "test-token" });
+        await service.SyncToMaimemoNotepad("np-test", ["apple", "bits and bobs", "bits and bobs"]);
+        Assert.Equal(original + "\nbits and bobs", saved);
+        await service.SyncToMaimemoNotepad("np-test", ["apple", "bits and bobs"]);
+        http.Verify(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
+        http.Verify(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Exactly(3));
+        http.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("# old\napple\nbanana")]
+    [InlineData("# old\napproach\napple\nbanana\nunexpected")]
+    public async Task AdditiveSync_RefusesReadbackThatLosesRetainedOrAddsUnexpectedTitles(string readback)
+    {
+        string url = $"{NotepadsUrl}/np-test";
+        var http = new Mock<IHttpHelper>(MockBehavior.Strict);
+        http.SetupSequence(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .ReturnsAsync(NotepadResponse("np-test", "# old\napproach\napple"))
+            .ReturnsAsync(NotepadResponse("np-test", readback));
+        http.Setup(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None))
+            .ReturnsAsync(NotepadResponse("np-test", readback));
+        var service = CreateService(http.Object, new MaiMemoOptions { Token = "test-token" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncToMaimemoNotepad("np-test", ["apple", "banana"]));
+        http.Verify(h => h.PostAsync(url, It.IsAny<string>(), It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Once);
+        http.Verify(h => h.GetAsync(url, It.IsAny<Dictionary<string, string>?>(), CancellationToken.None), Times.Exactly(2));
+        http.VerifyNoOtherCalls();
+    }
+
     private static bool HasAuth(Dictionary<string, string>? headers) =>
         headers != null && headers.GetValueOrDefault("Authorization") == "Bearer test-token"
         && headers.GetValueOrDefault("Accept") == "application/json";

@@ -74,17 +74,21 @@ namespace EudicSyncToMaiMemo.Services.Implementations.MaiMemo
             logger.LogInformation("严格正文校验：源唯一标题 {SourceUnique}，目标行 {Stored}，缺少 {Missing}，源外 {Extra}，重复 {Duplicates}，可更新 {Safe}",
                 plan.SourceUnique, plan.StoredTitles, plan.Missing, plan.Extra, plan.Duplicates, plan.Safe);
             if (!plan.Safe) throw new InvalidOperationException($"严格同步拒绝改写目标：{plan.Reason}。请配置新空白词本或通过只读诊断检查目标。");
+            if (plan.Extra > 0)
+                logger.LogWarning("安全增量同步保留源外合法标题 {Count} 条；欧路删除不删除墨墨已有词汇", plan.Extra);
             var newWords = plan.NewTitles;
 
             if (newWords.Count > 0)
             {
+                if (!NotepadWordMergeHelper.VerifyStrictAppend(existingContent, plan, plan.Content, cleanedWords))
+                    throw new InvalidOperationException("严格同步写前校验失败；未写入。");
                 notepad.Content = plan.Content;
                 await SaveNotepadAsync(resolvedNotepadId, notepad, cancellationToken);
                 var stored = await GetNotepadAsync(resolvedNotepadId, cancellationToken);
-                var verified = NotepadWordMergeHelper.PrepareStrictContent(stored.Content, cleanedWords);
-                if (!verified.Safe || verified.Missing != 0)
-                    throw new InvalidOperationException("严格同步写后 GET 校验失败：正文标题集合不一致；未重试。");
-                logger.LogInformation("严格同步写后校验通过：正文唯一标题 {Count}", verified.SourceUnique);
+                if (!NotepadWordMergeHelper.VerifyStrictAppend(existingContent, plan, stored.Content, cleanedWords))
+                    throw new InvalidOperationException("严格同步写后 GET 校验失败：原文或新增正文不一致；未重试。");
+                logger.LogInformation("安全增量写后校验通过：原有标题 {Existing}，新增 {Added}，总标题 {Total}，原文完整保留，模拟再次新增 0",
+                    plan.StoredTitles, newWords.Count, plan.StoredTitles + newWords.Count);
                 notepad = stored;
             }
 

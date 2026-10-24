@@ -33,7 +33,7 @@ namespace EudicSyncToMaiMemo.Services.Helpers
             public bool ChapterMode { get; set; }
         }
 
-        /// <summary>只制定追加计划；源外行、重复行或非章节旧词本必须人工处理，绝不自动删除。</summary>
+        /// <summary>只制定追加计划；保留合法源外行，拒绝重复行、非法行或非章节词本。</summary>
         public static StrictPlan PrepareStrictContent(string content, IReadOnlyList<string> sourceTitles)
         {
             var source = new HashSet<string>(sourceTitles, StringComparer.Ordinal);
@@ -42,7 +42,12 @@ namespace EudicSyncToMaiMemo.Services.Helpers
             bool empty = string.IsNullOrWhiteSpace(content);
             foreach (string line in SplitContentLines(content))
             {
-                if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (line.StartsWith('#'))
+                {
+                    if (string.IsNullOrWhiteSpace(line[1..]) || line.Any(char.IsControl)) plan.InvalidLines++;
+                    continue;
+                }
                 plan.StoredTitles++;
                 if (!stored.Add(line)) plan.Duplicates++;
                 var candidate = ExtractIndependentTitle(line);
@@ -50,11 +55,10 @@ namespace EudicSyncToMaiMemo.Services.Helpers
             }
             plan.Missing = source.Except(stored, StringComparer.Ordinal).Count();
             plan.Extra = stored.Except(source, StringComparer.Ordinal).Count();
-            plan.Safe = (empty || plan.ChapterMode) && plan.Extra == 0 && plan.Duplicates == 0 && plan.InvalidLines == 0;
+            plan.Safe = (empty || plan.ChapterMode) && plan.Duplicates == 0 && plan.InvalidLines == 0;
             if (!plan.Safe)
             {
                 plan.Reason = !empty && !plan.ChapterMode ? "target_not_chapter_mode"
-                    : plan.Extra > 0 ? "target_contains_non_source_titles"
                     : plan.Duplicates > 0 ? "target_contains_duplicates" : "target_invalid_lines";
                 return plan;
             }
@@ -62,6 +66,22 @@ namespace EudicSyncToMaiMemo.Services.Helpers
             if (plan.NewTitles.Count > 0)
                 plan.Content = AppendNewTitles(empty ? StrictChapter : content, plan.NewTitles);
             return plan;
+        }
+
+        /// <summary>精确校验完整追加结果、原文前缀及标题并集；同时模拟再次同步必须零新增。</summary>
+        public static bool VerifyStrictAppend(string original, StrictPlan expected, string actual,
+            IReadOnlyList<string> sourceTitles)
+        {
+            if (!expected.Safe || !string.Equals(actual, expected.Content, StringComparison.Ordinal)
+                || !actual.StartsWith(original, StringComparison.Ordinal)) return false;
+            var repeated = PrepareStrictContent(actual, sourceTitles);
+            if (!repeated.Safe || repeated.Missing != 0 || repeated.NewTitles.Count != 0
+                || repeated.StoredTitles != expected.StoredTitles + expected.NewTitles.Count) return false;
+            var union = new HashSet<string>(SplitContentLines(original)
+                .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#')), StringComparer.Ordinal);
+            union.UnionWith(sourceTitles);
+            return union.SetEquals(SplitContentLines(actual)
+                .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith('#')));
         }
 
         public sealed class TitleCandidate(string? title, string reason)
