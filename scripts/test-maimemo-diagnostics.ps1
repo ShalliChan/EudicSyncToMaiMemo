@@ -477,6 +477,37 @@ try {
     }
     finally { $listener.Stop(); $server.Dispose() }
     }
+    # Difference audit discloses exactly three approved titles, not source notes or IDs.
+    $differenceLogs = [Collections.Generic.List[string]]::new()
+    $historyCalls = [Collections.Generic.List[string]]::new()
+    $historyRequest = {
+        param($url, $auth)
+        Assert-Diagnostic ($auth -ceq 'Bearer private-test-token') 'Unexpected history authorization'
+        $historyCalls.Add($url)
+        if ($url.EndsWith('?limit=10&offset=0')) {
+            return @{ Status = 200; Body = '{"data":{"notepads":[{"id":"np-private-history","title":"欧路词典同步"}]}}' }
+        }
+        Assert-Diagnostic ($url.EndsWith('/np-private-history')) 'Unexpected history GET'
+        return @{ Status = 200; Body = '{"data":{"notepad":{"id":"np-private-history","content":"legacy"}}}' }
+    }
+    $differenceSink = { param($line) $differenceLogs.Add($line) }
+    $differenceNotepad = [pscustomobject]@{ id = 'np-private-target'; content = "# chapter`nkept`nnote title`nchanged`nlegacy" }
+    Write-StrictDifferenceAudit @('kept', "note title`nNotes: PRIVATE-NOTE", 'Changed') $differenceNotepad $historyRequest $credential $differenceSink
+    Assert-Diagnostic ($differenceLogs.Count -eq 3 -and $historyCalls.Count -eq 2) 'Difference audit request/disclosure count'
+    $differenceRows = @($differenceLogs | ForEach-Object { $_.Substring('difference_json='.Length) | ConvertFrom-Json })
+    Assert-Diagnostic (($differenceRows | Where-Object title -CEQ 'note title').skipped_record_match -eq 1) 'Skipped record not identified'
+    Assert-Diagnostic (($differenceRows | Where-Object title -CEQ 'changed').current_title_casefold_match -eq 1) 'Case change not identified'
+    Assert-Diagnostic (($differenceRows | Where-Object title -CEQ 'legacy').old_notebook_body_match -eq 1) 'Historical notebook match lost'
+    Assert-Diagnostic (!(($differenceLogs -join '') -match 'PRIVATE-NOTE|np-private|private-test-token|kept')) 'Difference audit leaked unrelated data'
+    $testCount++
+    $differenceLogs.Clear()
+    Write-StrictDifferenceAudit @('kept', 'note title', 'changed', 'legacy') $differenceNotepad { throw 'Network must not run' } $credential $differenceSink
+    Assert-Diagnostic ($differenceLogs.Count -eq 1 -and $differenceLogs[0] -eq 'difference_audit_stopped=unexpected_difference_count count=0') 'Unexpected differences must stop disclosure'
+    $testCount++
+    $differenceLogs.Clear()
+    Write-StrictDifferenceAudit @('kept') $differenceNotepad { throw 'Network unavailable' } $credential $differenceSink
+    Assert-Diagnostic ($differenceLogs.Count -eq 3 -and ($differenceLogs -join '').Contains('unavailable')) 'Historical absence was misrepresented'
+    $testCount++
     Write-Host "Read-only diagnostic tests passed: $testCount cases (mock responses and local loopback only)."
 }
 finally { [IO.File]::Delete($workflowFile) }

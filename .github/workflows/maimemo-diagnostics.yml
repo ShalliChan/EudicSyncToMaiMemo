@@ -2,6 +2,11 @@ name: MaiMemo Read-only Diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      difference_audit:
+        description: 'Only audit the three non-source body titles (GET only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ jobs:
         env:
           MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
           MAIMEMO_CONTENT_AUDIT: 'true'
+          MAIMEMO_DIFFERENCE_AUDIT: ${{ inputs.difference_audit }}
           MAIMEMO_STRICT_PREVIEW: 'true'
           MAIMEMO_TITLE_AUDIT: 'true'
           MAIMEMO_SOURCE_AUDIT: 'true'

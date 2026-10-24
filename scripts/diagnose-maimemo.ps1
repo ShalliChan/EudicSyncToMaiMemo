@@ -389,6 +389,72 @@ function Write-EudicSourceAudit {
     }
 }
 
+function Write-StrictDifferenceAudit {
+    param([string[]]$Words, $Notepad, [scriptblock]$Request, [string]$Token, [scriptblock]$WriteLog)
+    $helper = [EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper]
+    $titles = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $records = foreach ($word in $Words) {
+        $removed = 0
+        $cleaned = $helper::RemoveInvalidControlCharacters($word, [ref]$removed)
+        $strict = $helper::ExtractIndependentTitle($cleaned)
+        $relaxed = $helper::ExtractTitle($cleaned)
+        if ($null -ne $strict.Title) { [void]$titles.Add($strict.Title) }
+        [pscustomobject]@{ Raw = $word; Cleaned = $cleaned; Strict = $strict; Relaxed = $relaxed }
+    }
+    $stored = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($line in $helper::SplitContentLines($Notepad.content)) {
+        if (![string]::IsNullOrWhiteSpace($line) -and !$line.StartsWith('#')) { [void]$stored.Add($line) }
+    }
+    $extra = @($stored | Where-Object { !$titles.Contains($_) } | Sort-Object -CaseSensitive)
+    # This temporary disclosure is authorized for exactly the three difference titles only.
+    if ($extra.Count -ne 3) {
+        & $WriteLog "difference_audit_stopped=unexpected_difference_count count=$($extra.Count)"
+        return
+    }
+    foreach ($term in $extra) {
+        if ($null -eq $helper::ExtractIndependentTitle($term).Title -or $term.Length -gt 120) {
+            & $WriteLog 'difference_audit_stopped=unsafe_title'
+            return
+        }
+    }
+    $history = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $historyStatus = 'unavailable'
+    try {
+        # The old notebook is retained; inspect its raw body only, never parser expansions.
+        $offset = 0; $oldIds = [Collections.Generic.List[string]]::new(); $complete = $false
+        for ($page = 0; $page -lt 50; $page++) {
+            $response = & $Request "https://open.maimemo.com/open/api/v1/memo/notepads?limit=10&offset=$offset" "Bearer $Token"
+            if ([int]$response.Status -ne 200) { throw 'History unavailable' }
+            $payload = ConvertFrom-Json $response.Body -Depth 64
+            if ($payload.success -eq $false -or $payload.data.notepads -isnot [array]) { throw 'History unavailable' }
+            foreach ($item in $payload.data.notepads) {
+                if ($item.title -ceq '欧路词典同步' -and $item.id -is [string] -and $item.id -cne $Notepad.id) { $oldIds.Add($item.id) }
+            }
+            if ($payload.data.notepads.Count -lt 10) { $complete = $true; break }
+            $offset += $payload.data.notepads.Count
+        }
+        if (!$complete) { throw 'History incomplete' }
+        foreach ($id in $oldIds) {
+            $response = & $Request "https://open.maimemo.com/open/api/v1/memo/notepads/$([Uri]::EscapeDataString($id))" "Bearer $Token"
+            if ([int]$response.Status -ne 200) { throw 'History unavailable' }
+            $payload = ConvertFrom-Json $response.Body -Depth 64
+            if ($payload.success -eq $false -or $payload.data.notepad.id -cne $id -or $payload.data.notepad.content -isnot [string]) { throw 'History unavailable' }
+            foreach ($line in $helper::SplitContentLines($payload.data.notepad.content)) { [void]$history.Add($line) }
+        }
+        $historyStatus = if ($oldIds.Count) { 'old_notebook_body_checked' } else { 'no_old_notebook_found' }
+    } catch { $history.Clear(); $historyStatus = 'unavailable' }
+    foreach ($term in $extra) {
+        $raw = @($records | Where-Object { $_.Raw.Trim() -ceq $term }).Count
+        $skipped = @($records | Where-Object { $null -eq $_.Strict.Title -and ($_.Relaxed.Title -ceq $term -or ([regex]::Split($_.Cleaned, '\r\n|\n|\r')[0].Trim() -ceq $term)) }).Count
+        $casefold = @($titles | Where-Object { $_.Equals($term, [StringComparison]::OrdinalIgnoreCase) }).Count
+        $row = [ordered]@{ title = $term; raw_exact = $raw; skipped_record_match = $skipped;
+            current_title_casefold_match = $casefold; historical_check = $historyStatus;
+            old_notebook_body_match = [int]$history.Contains($term);
+            origin = $(if ($skipped) { 'current_record_rejected_by_strict_rule' } elseif ($casefold) { 'possible_title_case_change' } else { 'not_in_current_source_cause_unproven' }) }
+        & $WriteLog ('difference_json=' + ($row | ConvertTo-Json -Compress))
+    }
+}
+
 function Write-StrictSyncPreview {
     param([string[]]$Words, $Notepad, [scriptblock]$WriteLog)
     $titles = [Collections.Generic.List[string]]::new()
@@ -431,6 +497,7 @@ function Invoke-MaiMemoContentAudit {
         [switch]$TitleAudit,
         [switch]$SourceAudit,
         [switch]$StrictPreview,
+        [switch]$DifferenceAudit,
         [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
@@ -512,6 +579,10 @@ function Invoke-MaiMemoContentAudit {
         return 1
     }
 
+    if ($DifferenceAudit) {
+        Write-StrictDifferenceAudit $words.ToArray() $notepad $Request $Token $WriteLog
+        return 0
+    }
     if ($StrictPreview) {
         Write-StrictSyncPreview $words.ToArray() $notepad $WriteLog
         return 0
@@ -570,7 +641,7 @@ function Invoke-MaiMemoContentAudit {
 if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($env:MAIMEMO_CONTENT_AUDIT -eq 'true') {
-            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true') -SourceAudit:($env:MAIMEMO_SOURCE_AUDIT -eq 'true') -StrictPreview:($env:MAIMEMO_STRICT_PREVIEW -eq 'true'))
+            exit (Invoke-MaiMemoContentAudit -Token $env:MAIMEMO_TOKEN -EudicAuthorization $env:EUDIC_AUTHORIZATION -EudicBookId $env:EUDIC_BOOK_ID -LocateLiteralDollarOne:($env:MAIMEMO_LOCATE_DOLLAR_ONE -eq 'true') -TitleAudit:($env:MAIMEMO_TITLE_AUDIT -eq 'true') -SourceAudit:($env:MAIMEMO_SOURCE_AUDIT -eq 'true') -StrictPreview:($env:MAIMEMO_STRICT_PREVIEW -eq 'true') -DifferenceAudit:($env:MAIMEMO_DIFFERENCE_AUDIT -eq 'true'))
         }
         exit (Invoke-MaiMemoReadOnlyDiagnostic -Token $env:MAIMEMO_TOKEN)
     }
