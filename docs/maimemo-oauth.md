@@ -1,107 +1,40 @@
-# MaiMemo OAuth authentication
+# OAuth 授权与迁移
 
-`Sync Words` defaults to OAuth for daily and manual runs. The read-only diagnostics
-also refresh OAuth credentials. The separate verification workflow never runs sync.
-No Secrets are updated automatically.
+首次部署见 [README](../README.md)。官方 CLI 固定为 @maimemo/memo-api@1.3.1，刷新使用锁定的 openid-client，沿用官方 issuer 和公共 client ID。公共 client ID 不是个人凭证，不应替换成用户 Token。
 
-## Windows initial authorization
+## 凭证路径
 
-Use Node.js 22+ and GitHub CLI (`gh`). If GitHub CLI is absent, install it with
-`winget install --id GitHub.cli --exact`, then reopen PowerShell.
+1. 本机 CLI 将凭证保存到用户目录 .config/memo-api.json，限制本机文件访问权限。
+2. 导入脚本从自身 checkout 的 origin 识别 GitHub 仓库，拒绝不支持的地址，核对访问权限并要求输入完整仓库名确认。
+3. 确认后才读取凭证，仅将 rt.token 和原始 rt.expireAt 通过标准输入导入当前 Fork 的 MAIMEMO_OIDC_CREDENTIALS。
+4. Actions 每次刷新，在内存处理凭证，Access Token 仅交给子进程环境。没有凭证缓存、命令行参数、仓库文件、GITHUB_OUTPUT 或授权产物。
 
-```powershell
-Set-Location C:\Users\888\EudicSyncToMaiMemo
-npx --yes --package=@maimemo/memo-api@1.3.1 memo-api auth login
-gh auth login --hostname github.com --web --git-protocol https
-pwsh -File .\scripts\import-maimemo-oauth.ps1
-```
+目标 ID 统一来自 Repository Variable MAIMEMO_NOTEPAD_ID。启动器会检查 .NET 目标是否一致，不解析工作流中的历史个人 ID。
 
-The first command opens the official consent flow. Log in to the MaiMemo account
-owning the strict notebook. Do not use `--verbose`. The CLI stores credentials in
-the Windows user's `.config/memo-api.json`; protect it with the user's Windows ACL.
-Never paste, print, commit, or upload this file as an artifact.
+## 保护与维护
 
-The import reads that file locally, strips the fixed `apiToken` and access token,
-and sends only `rt.token` and `rt.expireAt` through GitHub CLI standard input to
-`MAIMEMO_OIDC_CREDENTIALS` in `ShalliChan/EudicSyncToMaiMemo`. The original
-`MAIMEMO_TOKEN` is untouched. An existing authorized GitHub CLI login can be reused.
+先刷新并 GET 核对词本 ID、名称和响应结构，再启动原有严格增量同步。诊断入口只启动 GET 审计。
 
-## Manual cloud verification
+定时与手动默认 oauth。只有显式选择 fixed 才使用固定 Token；OAuth 失败不静默回退。相关任务共用同一并发组，不取消正在执行的任务。避免本机同时刷新同一授权。
 
-Existing imported credentials are reused; upgrading does not require logging in again.
-Open Actions -> **MaiMemo OAuth Verification (preflight + two runners)** -> Run workflow -> main.
-A preflight refresh and GET must succeed before two further fresh GitHub-hosted
-runners execute sequentially. All three refresh the same original Secret, then GET the exact target from
-`sync.yml`; identity, strict notebook name, and content shape must match.
-Success in all three jobs must include:
+CLI 当前按首次登录后 90 天记录本地刷新期限，不在每次刷新时延长。服务器撤销可能提前失效。到期后重新登录和导入，不是永久授权。
 
-```text
-phase=refresh success=1 refresh_rotated=0
-phase=target_get http_status=200
-phase=target_get target_match=1 strict_target=1
-verification_passed=1 sync_executed=0 credentials_persisted=0
-```
+| 错误码 | 处理 |
+|---|---|
+| target_configuration_missing_or_invalid | 检查当前仓库 Variable 和完整 ID |
+| target_configuration_mismatch | 核对不同入口目标，不猜测或回退 |
+| refresh_expired_local | 本机重新登录并导入 |
+| refresh_rejected_reauthorization_required | 授权被拒绝，检查或重新授权 |
+| refresh_rotated_stop | 停止，先解决安全持久化，不重复使用旧凭证 |
+| refresh_failed_network_or_provider | 不代表过期；保留 Secret，排查网络与服务 |
+| target_unauthorized | 停止，核对资源权限 |
 
-The OAuth token endpoint receives the required refresh grant POST. Resource API
-access is GET only: no notepad create/update/delete, no .NET sync invocation,
-no credentials written to disk or artifacts, and no Secret write permission.
-The published official CLI is locked to version 1.3.1; compatibility tests compare
-its actual OIDC client, refresh call, resource URL and Bearer headers with the
-memory-only verifier. The pinned `openid-client` library performs that same refresh.
-The CLI's refresh helper is intentionally not invoked: it writes credentials to
-disk and discards any new refresh token, whereas this verifier must stop on rotation.
+单独的 OAuth Verification 工作流仅刷新和 GET，首轮成功后依次检查两台独立 Runner；不执行同步。没有新标题的运行不会 POST，不能单靠成功状态判断写权限。
 
-## Stop conditions and next stage
+## 从硬编码 ID 版本安全切换
 
-- `refresh_rotated_stop`: a different refresh token was returned. Stop rollout;
-  do not try the original credential again or add insecure persistence.
-- `refresh_rejected_reauthorization_required`: the grant was rejected. Stop rollout.
-- `refresh_expired_local`: the CLI's original local expiry was reached. Reauthorize.
-- `refresh_failed_network_or_provider`: not proof of expiry; preserve the Secret.
-- Any target access or identity error: stop rollout; do not run sync.
+现有用户在合并前，将目前使用的完整词本 ID 配置为同一仓库的 Repository Variable MAIMEMO_NOTEPAD_ID。不改 Secrets，不重新创建词本。
 
-The official CLI records a 90-day local refresh expiry and currently retains the
-same refresh token. Do not reset that expiry on daily refresh. Real server policy
-and cross-runner reuse must be verified, not inferred from mocked tests.
+合并后先只读预检，核对目标、数量和保护指标，再按需手动同步。固定 Token 保留作显式回退。缺少 Variable 时必须失败，不使用旧 ID。
 
-After three successful independent checks and explicit user confirmation, the
-workflow passes refreshed access tokens through the .NET child process environment.
-Never use command-line tokens, `$GITHUB_OUTPUT`, caches, or artifacts for credentials.
-All workflows that use this authorization share one concurrency group and do not
-cancel active runs. Local use of the same grant should not overlap cloud tests.
-No automatic token persistence is implemented: rotation deliberately stops rollout.
-
-## Enabled workflow and manual fallback
-
-Run 40079120393 on commit 4eb5d33 passed preflight and two further independent
-runners. All three refreshed the original Secret, reported no rotation and GET
-200 with the strict target identity matching. No sync or credential writes ran.
-
-`run-sync.mjs` is covered by unit tests with mocked process launchers. The formal
-workflow invokes it with `MAIMEMO_OAUTH_SYNC_CONFIRMED=true`. It verifies
-the configured target, refreshes and GET-verifies the notebook before starting
-the same existing .NET command. Access tokens travel only through the child
-environment; refresh credentials are excluded. OAuth failures stop the run rather
-than silently using the fixed token.
-
-The workflow installs the locked CLI 1.3.1 and OAuth dependencies and uses the
-existing `MAIMEMO_OIDC_CREDENTIALS`. Business logic, target ID and the 09:05 Beijing
-daily schedule remain unchanged. In Actions -> Sync Words -> Run workflow,
-`authentication=oauth` is the default; choose `fixed` explicitly only for manual
-fallback. That branch alone receives the existing `MAIMEMO_TOKEN`. OAuth failure
-never starts the fallback branch. Secrets remain unchanged.
-
-The diagnostics workflow uses `run-sync.mjs --diagnose`, which launches only the
-existing PowerShell GET audit with its refreshed access token in the child
-environment. It never invokes .NET sync. Both workflows share the authorization
-concurrency group. No diagnostics or sync run writes new refresh credentials.
-
-When the refresh grant expires or is revoked, repeat the Windows login and import.
-The current local expiry remains 90 days from initial login, not from each refresh.
-If no titles are new, sync intentionally sends no update request: success then
-verifies read access and idempotence, but is not a real write-permission test.
-
-Official references:
-- https://github.com/maimemo/memo-api-cli/blob/main/src/lib/oidc.ts
-- https://github.com/maimemo/memo-api-cli/blob/main/src/lib/auth.ts
-- https://github.com/maimemo/memo-api-cli/blob/main/docs/plans/auth.md
+官方参考：[CLI](https://github.com/maimemo/memo-api-cli)、[开放平台](https://memodocs.maimemo.com/docs/open/)、[API 规范](https://open.maimemo.com/api_bundle.yaml)。

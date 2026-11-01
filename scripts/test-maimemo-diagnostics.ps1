@@ -20,7 +20,8 @@ function New-TestResponse {
 function Test-Case {
     param([object[]]$Responses, [string]$ExpectedMatch, [int]$ExpectedRequests,
         [int]$ExpectedExit = 1, [string]$Token = $credential, [string]$ExpectedCode = '',
-        [int]$ExpectedScanned = -1, [int]$ExpectedPages = -1, [int[]]$ExpectedOffsets = @())
+        [int]$ExpectedScanned = -1, [int]$ExpectedPages = -1, [int[]]$ExpectedOffsets = @(),
+        [string]$ConfiguredTarget = $target)
     $state = @{
         Responses = [Collections.Generic.Queue[object]]::new()
         Calls = [Collections.Generic.List[string]]::new()
@@ -38,7 +39,7 @@ function Test-Case {
         return $response
     }.GetNewClosure()
     $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
-    $result = Invoke-MaiMemoReadOnlyDiagnostic -Token $Token -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog
+    $result = Invoke-MaiMemoReadOnlyDiagnostic -Token $Token -TargetId $ConfiguredTarget -Request $request -WriteLog $writeLog
     Assert-Diagnostic ($result -eq $ExpectedExit) "Unexpected result for $ExpectedMatch (exit=$result; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $ExpectedRequests) "Unexpected request count for $ExpectedMatch"
     Assert-Diagnostic ($state.Logs.Count -gt 0 -and $state.Logs[-1] -match " target_match=$ExpectedMatch(?: |$)") "Unexpected match result for $ExpectedMatch"
@@ -94,7 +95,7 @@ function Test-ContentAudit {
         return $response
     }.GetNewClosure()
     $writeLog = { param($line) $state.Logs.Add($line) }.GetNewClosure()
-    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -WorkflowPath $workflowFile -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit -SourceAudit:$SourceAudit -StrictPreview:$StrictPreview
+    $exitCode = Invoke-MaiMemoContentAudit -Token $credential -EudicAuthorization 'NIS private-eudic-token' -EudicBookId 'book private' -TargetId $target -Request $request -WriteLog $writeLog -LocateLiteralDollarOne:$LocateLiteralDollarOne -TitleAudit:$TitleAudit -SourceAudit:$SourceAudit -StrictPreview:$StrictPreview
     Assert-Diagnostic ($exitCode -eq $ExpectedExit) "Audit exit mismatch ($exitCode; $($state.Logs -join '; '))"
     Assert-Diagnostic ($state.Calls.Count -eq $Responses.Count) 'Incorrect audit GET count'
     if ($TitleAudit -and !$SourceAudit -and !$StrictPreview -and $ExpectedExit -eq 0) {
@@ -437,20 +438,17 @@ try {
         'source=eudic_fetch anomaly=transport_error codepoints=none count=1'
     ) -ExpectedExit 1
 
-    # 配置解析必须与现有 sync.yml 一致；拒绝多目标/动态表达式，不猜测 ID。
-    $actualId = Get-MaiMemoDiagnosticTargetId (Join-Path $PSScriptRoot '../.github/workflows/sync.yml')
-    Assert-Diagnostic ($actualId.StartsWith('np-')) 'Existing static target not recognized'
-    foreach ($scalar in @("'$target'", $target)) {
-        [IO.File]::WriteAllText($workflowFile, "env:`n  MaiMemo__DefaultNotepadId: $scalar # comment`n")
-        Assert-Diagnostic ((Get-MaiMemoDiagnosticTargetId $workflowFile) -ceq $target) 'Static scalar changed'
+    Test-Case @() 'unknown' 0 -ConfiguredTarget '' -ExpectedCode 'configuration_unavailable'
+    Test-Case @() 'unknown' 0 -ConfiguredTarget '12345' -ExpectedCode 'configuration_unavailable'
+    foreach ($invalidTarget in @('', '12345', 'np-bad id', '${{ vars.MAIMEMO_NOTEPAD_ID }}')) {
+        $rejected = $false
+        try { $null = Get-MaiMemoDiagnosticTargetId $invalidTarget } catch { $rejected = $true }
+        Assert-Diagnostic $rejected 'Invalid target accepted'
     }
-    [IO.File]::WriteAllText($workflowFile, "  MaiMemo__DefaultNotepadId: '$target'`n  MaiMemo__DefaultNotepadId: '$target'`n")
-    Test-Case @() 'unknown' 0 -ExpectedCode 'configuration_unavailable'
-    [IO.File]::WriteAllText($workflowFile, '  MaiMemo__DefaultNotepadId: ${{ secrets.TEST }}')
-    Test-Case @() 'unknown' 0 -ExpectedCode 'configuration_unavailable'
+    Assert-Diagnostic ((Get-MaiMemoDiagnosticTargetId $target) -ceq $target) 'Configured target changed'
     $workflow = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../.github/workflows/maimemo-diagnostics.yml'))
     Assert-Diagnostic ($workflow.Contains('workflow_dispatch:') -and !$workflow.Contains('Run Sync') -and !$workflow.Contains('dotnet run')) 'Diagnostic workflow can invoke sync'
-    Assert-Diagnostic ($workflow.Contains('${{ secrets.MAIMEMO_TOKEN }}')) 'Existing Secret not used'
+    Assert-Diagnostic ($workflow.Contains('${{ secrets.MAIMEMO_OIDC_CREDENTIALS }}')) 'Existing Secret not used'
     Assert-Diagnostic ($workflow.Contains('${{ secrets.EUDIC_AUTHORIZATION }}') -and $workflow.Contains('${{ secrets.EUDIC_BOOK_ID }}')) 'Existing Eudic Secrets not used'
 
     # 本机 TCP 服务核验真正发出的 HTTP，避免 Mock 掩盖参数/认证头格式问题。

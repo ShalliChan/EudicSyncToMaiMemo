@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -20,10 +19,11 @@ export function parseCredentials(json, now = Date.now() / 1000) {
   return { rt: { token: rt.token, expireAt: rt.expireAt } };
 }
 
-export function targetFromWorkflow(text) {
-  const matches = [...text.matchAll(/^\s*MaiMemo__DefaultNotepadId:\s*['"]?(np-[A-Za-z0-9_-]+)['"]?\s*$/gm)];
-  if (matches.length !== 1) fail('target_configuration_invalid');
-  return matches[0][1];
+export function targetFromEnvironment(env = process.env) {
+  const target = env.MAIMEMO_NOTEPAD_ID;
+  if (typeof target !== 'string' || !/^np-[A-Za-z0-9_-]+$/.test(target)) fail('target_configuration_missing_or_invalid');
+  if (env.MaiMemo__DefaultNotepadId && env.MaiMemo__DefaultNotepadId !== target) fail('target_configuration_mismatch');
+  return target;
 }
 
 async function officialRefresh(rt) {
@@ -80,7 +80,7 @@ export async function authorize(env = process.env, log = console.log) {
   const credentials = env.MAIMEMO_OIDC_CREDENTIALS;
   delete env.MAIMEMO_OIDC_CREDENTIALS;
   if (!credentials) fail('credentials_missing');
-  const target = targetFromWorkflow(readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8'));
+  const target = targetFromEnvironment(env);
   const mask = value => {
     if (env.GITHUB_ACTIONS === 'true') {
       log(`::add-mask::${value.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')}`);
@@ -99,7 +99,9 @@ export async function main(env = process.env, log = console.log) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(error => {
+  const action = process.argv.length === 3 && process.argv[2] === '--check-config'
+    ? async () => { targetFromEnvironment(); console.log('target_configuration_valid=1'); } : main;
+  action().catch(error => {
     console.error(`oauth_verification_failed=${safeFailureCode(error)}`);
     process.exitCode = 1;
   });

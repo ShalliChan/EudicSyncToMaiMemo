@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runSync, runDiagnostics } from './run-sync.mjs';
 
-const env = () => ({ MAIMEMO_OAUTH_SYNC_CONFIRMED: 'true', MaiMemo__DefaultNotepadId: 'np-fixture',
+const env = () => ({ MAIMEMO_NOTEPAD_ID: 'np-fixture', MAIMEMO_OAUTH_SYNC_CONFIRMED: 'true', MaiMemo__DefaultNotepadId: 'np-fixture',
   MAIMEMO_OIDC_CREDENTIALS: 'private-refresh', MaiMemo__Token: 'old-fixed', MAIMEMO_API_TOKEN: 'old-alias',
   MAIMEMO_TOKEN: 'old-token', Eudic__Authorization: 'eudic-fixture' });
 const configuredTarget = () => 'np-fixture';
@@ -32,6 +32,15 @@ test('no activation without explicit rollout flag', async () => {
 });
 test('target mismatch stops before refresh', async () => {
   await assert.rejects(runSync({ env: env(), configuredTarget: () => 'np-other', getToken: () => assert.fail() }), /target_configuration_mismatch/);
+});
+test('missing repository variable stops before any authentication or launch', async () => {
+  const config = env();
+  delete config.MAIMEMO_NOTEPAD_ID;
+  await assert.rejects(runSync({ env: config, getToken: () => assert.fail(), launch: () => assert.fail() }), /target_configuration_missing_or_invalid/);
+});
+test('a conflicting .NET target cannot authenticate or write', async () => {
+  const config = { ...env(), MaiMemo__DefaultNotepadId: 'np-other' };
+  await assert.rejects(runSync({ env: config, getToken: () => assert.fail(), launch: () => assert.fail() }), /target_configuration_mismatch/);
 });
 test('authorization or rotation failure cannot fall back to fixed token or launch sync', async () => {
   await assert.rejects(runSync({ env: env(), configuredTarget, getToken: async () => { throw new Error('refresh_rotated_stop'); }, launch: () => assert.fail() }), /refresh_rotated_stop/);
@@ -78,4 +87,14 @@ test('diagnostic workflow uses OAuth while retaining read-only script', () => {
   assert.ok(yaml.includes('run-sync.mjs --diagnose'));
   assert.ok(yaml.includes('secrets.MAIMEMO_OIDC_CREDENTIALS'));
   assert.ok(!yaml.includes('secrets.MAIMEMO_TOKEN'));
+});
+test('all regular workflow entry points share the repository variable, with no literal target', () => {
+  for (const name of ['sync.yml', 'maimemo-diagnostics.yml', 'maimemo-oauth-verify.yml']) {
+    const yaml = readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), 'utf8');
+    assert.ok(yaml.includes('MAIMEMO_NOTEPAD_ID: ${{ vars.MAIMEMO_NOTEPAD_ID }}'));
+    assert.ok(!/np-[A-Za-z0-9_-]{15,}/.test(yaml));
+  }
+  const sync = readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8');
+  assert.ok(sync.includes('verify.mjs --check-config'));
+  assert.ok(sync.includes('MaiMemo__DefaultNotepadId: ${{ vars.MAIMEMO_NOTEPAD_ID }}'));
 });

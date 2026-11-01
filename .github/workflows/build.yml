@@ -34,6 +34,20 @@ jobs:
       shell: pwsh
       run: ./scripts/test-maimemo-diagnostics.ps1
 
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Test OAuth configuration and launchers (mock only)
+      working-directory: scripts/maimemo-oauth
+      run: |
+        npm ci --ignore-scripts --no-audit --no-fund
+        npm test
+
+    - name: Test credential import validation (no upload)
+      shell: pwsh
+      run: ./scripts/test-import-maimemo-oauth.ps1
+
     - name: Test strict notebook provisioning (mock only)
       shell: pwsh
       run: ./scripts/test-provision-strict-notepad.ps1

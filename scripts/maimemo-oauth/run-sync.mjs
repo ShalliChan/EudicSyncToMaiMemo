@@ -1,9 +1,8 @@
 // Refresh in memory, GET-verify target identity, then launch the original program.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { authorize, safeFailureCode, targetFromWorkflow } from './verify.mjs';
+import { authorize, safeFailureCode, targetFromEnvironment } from './verify.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const project = fileURLToPath(new URL('../../src/EudicSyncToMaiMemo/EudicSyncToMaiMemo.csproj', import.meta.url));
@@ -19,7 +18,7 @@ function exitStatus(result) {
   return result.status;
 }
 export async function runSync({ env = process.env, getToken = authorize,
-  launch = spawnSync, configuredTarget = () => targetFromWorkflow(readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8')) } = {}) {
+  launch = spawnSync, configuredTarget = () => targetFromEnvironment(env) } = {}) {
   if (env.MAIMEMO_OAUTH_SYNC_CONFIRMED !== 'true') throw new Error('rollout_not_confirmed');
   if (env.MaiMemo__DefaultNotepadId !== configuredTarget()) throw new Error('target_configuration_mismatch');
   const childEnv = await authorizedEnvironment(env, getToken);

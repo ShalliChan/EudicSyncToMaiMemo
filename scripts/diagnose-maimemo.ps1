@@ -2,22 +2,10 @@
 $ErrorActionPreference = 'Stop'
 
 function Get-MaiMemoDiagnosticTargetId {
-    param([string]$WorkflowPath)
-    # 读取现有配置，避免复制或改变目标 ID，也避免 Actions 的 env 摘要打印 ID。
-    # 仅接受单个静态 YAML 标量；配置变化时安全退出，不猜测 ID。
-    $pattern = @'
-(?m)^\s+MaiMemo__DefaultNotepadId:[ \t]*(?:"(?<double>[^"\r\n]+)"|'(?<single>[^'\r\n]+)'|(?<plain>[^\s#'"{}]+))[ \t]*(?:#.*)?\r?$
-'@
-    $matchesFound = [regex]::Matches([IO.File]::ReadAllText($WorkflowPath), $pattern)
-    if ($matchesFound.Count -ne 1) { throw 'Unsupported target configuration' }
-    foreach ($group in @('double', 'single', 'plain')) {
-        if ($matchesFound[0].Groups[$group].Success) {
-            $value = $matchesFound[0].Groups[$group].Value
-            if ($value.Contains('${{')) { throw 'Unsupported target configuration' }
-            return $value
-        }
-    }
-    throw 'Missing target configuration'
+    param([string]$TargetId = $env:MAIMEMO_NOTEPAD_ID)
+    if ([string]::IsNullOrWhiteSpace($TargetId) -or $TargetId -cnotmatch '^np-[A-Za-z0-9_-]+$') { throw 'target_configuration_missing_or_invalid' }
+    if ($env:MaiMemo__DefaultNotepadId -and $env:MaiMemo__DefaultNotepadId -cne $TargetId) { throw 'target_configuration_mismatch' }
+    return $TargetId
 }
 
 function Invoke-MaiMemoDiagnosticGet {
@@ -62,7 +50,7 @@ function Get-MaiMemoDiagnosticErrorCode {
 function Invoke-MaiMemoReadOnlyDiagnostic {
     param(
         [string]$Token,
-        [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
+        [string]$TargetId = $env:MAIMEMO_NOTEPAD_ID,
         [scriptblock]$Request = { param($url, $credential) Invoke-MaiMemoDiagnosticGet $url $credential },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
     )
@@ -74,7 +62,7 @@ function Invoke-MaiMemoReadOnlyDiagnostic {
     }.GetNewClosure()
     try {
         if ([string]::IsNullOrWhiteSpace($Token)) { throw 'Missing credential' }
-        $targetId = Get-MaiMemoDiagnosticTargetId $WorkflowPath
+        $targetId = Get-MaiMemoDiagnosticTargetId $TargetId
     }
     catch {
         & $WriteLog 'http_status=0 error_code=configuration_unavailable target_match=unknown'
@@ -504,14 +492,14 @@ function Invoke-MaiMemoContentAudit {
         [switch]$SourceAudit,
         [switch]$StrictPreview,
         [switch]$DifferenceAudit,
-        [string]$WorkflowPath = (Join-Path $PSScriptRoot '../.github/workflows/sync.yml'),
+        [string]$TargetId = $env:MAIMEMO_NOTEPAD_ID,
         [scriptblock]$Request = { param($url, $authorization) Invoke-MaiMemoDiagnosticGet $url $authorization -RawAuthorization },
         [scriptblock]$WriteLog = { param($line) Write-Host $line }
     )
     try {
         if ([string]::IsNullOrWhiteSpace($Token) -or [string]::IsNullOrWhiteSpace($EudicAuthorization) -or
             [string]::IsNullOrWhiteSpace($EudicBookId)) { throw 'Missing configuration' }
-        $targetId = Get-MaiMemoDiagnosticTargetId $WorkflowPath
+        $targetId = Get-MaiMemoDiagnosticTargetId $TargetId
         if (!('EudicSyncToMaiMemo.Services.Helpers.NotepadWordMergeHelper' -as [type])) {
             # 直接编译本次检出的生产 helper 源码，不另写清理/去重算法。
             $helperPath = Join-Path $PSScriptRoot '../src/EudicSyncToMaiMemo.Services/Helpers/NotepadWordMergeHelper.cs'

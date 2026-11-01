@@ -14,6 +14,9 @@ on:
           - fixed
         default: oauth
 
+env:
+  MAIMEMO_NOTEPAD_ID: ${{ vars.MAIMEMO_NOTEPAD_ID }}
+
 permissions:
   contents: read
 
@@ -37,16 +40,15 @@ jobs:
           dotnet-quality: 'ga'
 
       - uses: actions/setup-node@v4
-        if: inputs.authentication != 'fixed'
         with:
           node-version: '22'
       - name: Install pinned OAuth dependencies
-        if: inputs.authentication != 'fixed'
         working-directory: scripts/maimemo-oauth
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run Sync
         shell: bash
         run: |
+          node scripts/maimemo-oauth/verify.mjs --check-config
           if [ "$MAIMEMO_AUTH_MODE" = "oauth" ]; then
             node scripts/maimemo-oauth/run-sync.mjs
           elif [ "$MAIMEMO_AUTH_MODE" = "fixed" ]; then
@@ -63,7 +65,7 @@ jobs:
           Eudic__DefaultBookId: ${{ secrets.EUDIC_BOOK_ID }}
           MaiMemo__Provider: OpenApi
           MaiMemo__Token: ${{ inputs.authentication == 'fixed' && secrets.MAIMEMO_TOKEN || '' }}
-          MaiMemo__DefaultNotepadId: "np-PqBtKGw4-gKpQeQdME2IweQ0U-Ml7a8wRB2RwMcm52qpRYqOCI4TkyQisKTH2Jg_"
+          MaiMemo__DefaultNotepadId: ${{ vars.MAIMEMO_NOTEPAD_ID }}
           Notification__Enabled: ${{ secrets.NOTIFICATION_ENABLED }}
           Notification__Url: ${{ secrets.NOTIFICATION_URL }}
           Notification__RequestBody: ${{ secrets.NOTIFICATION_REQUEST_BODY }}

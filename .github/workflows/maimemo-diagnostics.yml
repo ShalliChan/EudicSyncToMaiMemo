@@ -8,6 +8,9 @@ on:
         type: boolean
         default: false
 
+env:
+  MAIMEMO_NOTEPAD_ID: ${{ vars.MAIMEMO_NOTEPAD_ID }}
+
 permissions:
   contents: read
 

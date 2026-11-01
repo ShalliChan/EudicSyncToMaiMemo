@@ -102,18 +102,17 @@ function Invoke-StrictNotepadProvision {
 
 function Invoke-StrictManifestPreview {
     param([string]$ManifestPath, [string]$Token, [string]$EudicAuthorization, [string]$EudicBookId,
-        [scriptblock]$Audit = { param($tokenValue, $auth, $bookId, $path, $log) Invoke-MaiMemoContentAudit -Token $tokenValue -EudicAuthorization $auth -EudicBookId $bookId -WorkflowPath $path -StrictPreview -WriteLog $log },
+        [scriptblock]$Audit = { param($tokenValue, $auth, $bookId, $path, $log) Invoke-MaiMemoContentAudit -Token $tokenValue -EudicAuthorization $auth -EudicBookId $bookId -TargetId $path -StrictPreview -WriteLog $log },
         [scriptblock]$WriteLog = { param($line) Write-Host $line })
-    $temporary = [IO.Path]::GetTempFileName()
+
     try {
         $manifest = ConvertFrom-Json ([IO.File]::ReadAllText($ManifestPath))
         if (!$manifest.detail_verified -or $manifest.id -cnotmatch '^np-[A-Za-z0-9_-]+$') { throw 'invalid_manifest' }
         $manifest.preview_verified = $false
         [IO.File]::WriteAllText($ManifestPath, ($manifest | ConvertTo-Json -Compress))
-        [IO.File]::WriteAllText($temporary, "env:`n  MaiMemo__DefaultNotepadId: '$($manifest.id)'`n")
         $logs = [Collections.Generic.List[string]]::new()
         $log = { param($line) $logs.Add($line); & $WriteLog $line }.GetNewClosure()
-        $result = & $Audit $Token $EudicAuthorization $EudicBookId $temporary $log
+        $result = & $Audit $Token $EudicAuthorization $EudicBookId $manifest.id $log
         foreach ($metric in @('ready=1', 'prepared_set_equal=1', 'extra=0', 'target_duplicates=0', 'invalid_lines=0')) {
             $parts = $metric.Split('=')
             if ($result -ne 0 -or !$logs.Contains("source=strict_preview anomaly=$($parts[0]) codepoints=none count=$($parts[1])")) { throw 'preview_rejected' }
@@ -123,7 +122,7 @@ function Invoke-StrictManifestPreview {
         & $WriteLog 'strict_preview_verified=true sync_words_not_run=true'
     }
     catch { & $WriteLog 'strict_preview_verified=false no_retry=true'; throw 'strict_preview_failed' }
-    finally { [IO.File]::Delete($temporary) }
+
 }
 
 if ($MyInvocation.InvocationName -ne '.') {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseCredentials, targetFromWorkflow, verify } from './verify.mjs';
+import { parseCredentials, targetFromEnvironment, verify } from './verify.mjs';
 
 const rt = 'private-refresh-fixture';
 const at = 'private-access-fixture';
@@ -101,11 +101,10 @@ test('wrong identity/title or missing content cannot pass', async () => {
 test('resource network errors are sanitized', async () => {
   assert.equal((await scenario({ fetchError: new Error('raw-secret-in-error') })).failure.message, 'target_request_failed');
 });
-test('target uses existing sync configuration; ambiguity fails closed', () => {
-  assert.equal(targetFromWorkflow(`env:\n  MaiMemo__DefaultNotepadId: '${target}'\n`), target);
-  assert.throws(() => targetFromWorkflow('MaiMemo__DefaultNotepadId: ${{ secrets.ID }}'));
-  assert.throws(() => targetFromWorkflow(`MaiMemo__DefaultNotepadId: ${target}\nMaiMemo__DefaultNotepadId: ${target}`));
-  assert.ok(targetFromWorkflow(readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8')).startsWith('np-'));
+test('repository variable is mandatory and legacy mismatches fail closed', () => {
+  assert.equal(targetFromEnvironment({ MAIMEMO_NOTEPAD_ID: target }), target);
+  for (const env of [{}, { MAIMEMO_NOTEPAD_ID: '123' }, { MAIMEMO_NOTEPAD_ID: 'np-bad id' },
+    { MAIMEMO_NOTEPAD_ID: target, MaiMemo__DefaultNotepadId: 'np-other' }]) assert.throws(() => targetFromEnvironment(env));
 });
 test('verification workflow requires preflight then two sequential jobs without credential outputs/artifacts', () => {
   const yaml = readFileSync(new URL('../../.github/workflows/maimemo-oauth-verify.yml', import.meta.url), 'utf8');

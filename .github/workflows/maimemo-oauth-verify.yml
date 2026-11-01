@@ -3,6 +3,9 @@ name: MaiMemo OAuth Verification (preflight + two runners)
 on:
   workflow_dispatch:
 
+env:
+  MAIMEMO_NOTEPAD_ID: ${{ vars.MAIMEMO_NOTEPAD_ID }}
+
 permissions:
   contents: read
 
