@@ -1,113 +1,71 @@
 # EudicSyncToMaiMemo
 
-把欧路独立收藏的单词、短语自动增量添加到墨墨云词本。
+在欧路收藏单词或短语，之后由 GitHub 每天把有效标题添加到你的墨墨云词本。首次配置需要一台 Windows 电脑；配置完成后，电脑无需保持开机。
 
-Fork 自 [viazure/EudicSyncToMaiMemo](https://github.com/viazure/EudicSyncToMaiMemo)，保留原作者 viazure 的署名及 [MIT License](LICENSE)。本 Fork 增加严格标题筛选、安全增量合并、写后校验、OAuth 刷新和只读诊断。通知功能参考 [jeessy2/ddns-go](https://github.com/jeessy2/ddns-go)。
+**第一次使用：[Windows 零基础部署教程](docs/windows-setup.md)**。从安装软件开始，按顺序完成 Fork、授权、配置、只读检查和首次同步。不需要编程，也不需要编辑工作流。
 
-## 工作原理与边界
+## 它怎样运行
 
-- 欧路新增 → 墨墨追加；欧路取消收藏 → 墨墨保留历史词汇。
-- 只接受完整、有效的独立收藏标题；不拆短语、不生成词形、不从笔记或 Markdown 猜标题。
-- 完整标题精确去重，区分大小写；没有新增就不写入。
-- 原有合法标题、章节、空行及换行完整保留。非法行、重复标题及非章节结构阻止写入。
-- 写后重新 GET：正文必须与计划追加结果完全一致，标题集合等于“原有标题 ∪ 当前有效源标题”，再次模拟新增应为零。
-- 不修改欧路，不自动清空或重建词本。
-- 墨墨部分未收录短语可能显示“自编此单词”，仍需在 App 中补充提交；不会自动生成释义。
-
-## 推荐部署：GitHub Actions
-
-需要欧路和墨墨账号，以及安装 Node.js 22+、GitHub CLI、PowerShell 的电脑。首次授权在本机完成，随后云端每天运行，电脑无需常开。
-
-### 1. Fork 并克隆自己的仓库
-
-点击 GitHub 的 **Fork**，保留默认分支 main。克隆自己的 Fork：
-```powershell
-git clone https://github.com/<你的账号>/EudicSyncToMaiMemo.git
-cd EudicSyncToMaiMemo
-git remote get-url origin
+```mermaid
+flowchart TD
+    Timer["GitHub 定时任务：计划北京时间每天 09:05"] --> Runner["GitHub 云端运行本项目"]
+    Manual["你点击 Run workflow：立即请求运行一次"] --> Runner
+    Secrets["你自己仓库的 Secrets：欧路授权、墨墨刷新凭证"] --> Runner
+    Config["你自己仓库的 Variable：目标词本 ID"] --> Runner
+    Runner --> OAuth["向墨墨刷新本次使用的 Access Token"]
+    OAuth --> Read["只读获取：欧路默认生词本、墨墨现有正文"]
+    Eudic["欧路：唯一原始收藏库"] --> Read
+    Memo["墨墨：你的专用云词本"] --> Read
+    Read --> Check["提取独立标题、精确去重、安全检查"]
+    Check --> Preview["只读诊断：报告预计新增，不写入"]
+    Check --> Sync["正式同步：只追加尚不存在的标题"]
+    Sync --> Memo
+    Sync --> Verify["写后重新读取，验证原文保留和新增结果"]
 ```
-确认 origin 指向自己，不是上游。不要提交任何授权凭证。
 
-### 2. 墨墨首次授权
+代码放在自己的 GitHub 仓库中，GitHub Actions 是替你在云端执行它的服务。手动按钮和定时计划运行的是同一套同步程序；手动运行一次不等于创建或开启定时计划。[定时运行说明](docs/windows-setup.md#9-确认每天自动运行)。
 
-```powershell
-npx --yes --package=@maimemo/memo-api@1.3.1 memo-api auth login
-gh auth login --hostname github.com --web --git-protocol https
-pwsh -File ./scripts/import-maimemo-oauth.ps1
-```
-在浏览器登录拥有词本的墨墨账号并授权。导入脚本显示当前 origin 仓库；检查后输入完整的“账号/仓库名”确认。脚本确认仓库写权限后，通过标准输入上传刷新凭证，不打印凭证或上传整个配置文件。
+## 能做什么，不能做什么
 
-成功后自己的 Fork 会出现 MAIMEMO_OIDC_CREDENTIALS Secret。不要将本机凭证文件粘贴到聊天、Issue、仓库或构建产物。
+- 只同步欧路独立收藏的有效英文单词或完整短语标题；不拆分短语、不生成词形或关联表达。
+- 不同步学习笔记、例句和 Markdown；无法可靠识别标题的记录会跳过并统计。
+- 欧路新增 → 墨墨追加；欧路取消收藏 → 墨墨保留。完整标题精确去重，区分大小写。
+- 保留墨墨原有合法标题、章节、空行及换行；有非法结构或重复标题时停止。没有新增不写入，写后重新读取校验。
+- 不修改欧路，不自动删除词汇、清空或重建词本。
+- 墨墨未收录的部分短语可能仍需在 App 中“自编此单词”并提交；项目不自动编写释义，也不保证墨墨对所有短语的解析展示完全一致。
 
-### 3. 配置自己的账号和词本
+## 开始前准备
 
-在 **Settings → Secrets and variables → Actions** 配置：
+- 自己的 GitHub、欧路词典和墨墨账号；欧路收藏已同步到欧路云端。
+- Windows 10/11 电脑、浏览器，可正常连接 GitHub、npm 和两家的官方服务。
+- 安装 **Git、GitHub CLI、Node.js 22**。教程有官方下载入口、安装选项和版本检查。
+- 使用 Windows 自带的 **Windows PowerShell 5.1**。不要求另装 PowerShell 7、.NET SDK 或编辑器。
 
-| 类型 | 名称 | 内容 |
-|---|---|---|
-| Secret | MAIMEMO_OIDC_CREDENTIALS | 上一步自动导入 |
-| Secret | EUDIC_AUTHORIZATION | [欧路开放平台](https://my.eudic.net/OpenAPI/Authorization)提供的完整 Authorization |
-| Secret | EUDIC_BOOK_ID | 默认生词本填 0 |
-| Repository Variable | MAIMEMO_NOTEPAD_ID | 自己的完整 np- 开头云词本 ID |
+授权信息只放在自己仓库的 **Secrets**；词本 ID 放在 **Variables**。不要把凭证粘贴到 Issue、聊天、README 或截图中。[按教程配置](docs/windows-setup.md#6-配置欧路授权和墨墨目标)。
 
-在墨墨创建名称为 **欧路词典同步（严格）** 的词本，正文只填：
-```text
-# 欧路词典同步
-```
-保留其他旧词本。通过官方演示或下面的官方 CLI 查询自己的完整 ID：
-```powershell
-npx --yes --package=@maimemo/memo-api@1.3.1 memo-api notepad list
-```
-不要使用截断 ID 或网页数字 ID。词本 ID 配置在 **Variables**，不是 Secrets。同步和诊断共用它，不需要编辑工作流。缺失或不一致时停止，不回退到示例或其他人的 ID。
+## 怎样算部署成功
 
-### 4. 先做只读预检
+1. **先只读检查**：`ready=1`，预计合并通过校验，没有非法行或重复标题。
+2. **再手动同步**：`Sync Words` 成功，有新增时写后校验通过，手机上能看到目标词本。
+3. **再次只读检查**：`missing=0`、`would_add=0`，原有内容保留。数量以自己的收藏为准，不需要达到其他人的词数。
+4. **确认自动运行**：`Sync Words` 已启用，后续能看到由 `schedule` 触发的记录。
 
-在自己的 **Actions** 启用工作流，运行 **MaiMemo Read-only Diagnostics → Run workflow → main**，保持 difference_audit=false。
+诊断成功不表示已经写入；没有新增的同步不表示测试过写权限。无需为验证去重而反复真实写入。[结果逐项解释](docs/windows-setup.md#7-首次只读预检)。
 
-查看 source=strict_preview：
+## 后续维护与帮助
 
-- ready=1、prepared_union_equal=1、original_content_preserved=1。
-- target_duplicates=0、invalid_lines=0、second_merge_additions=0。
-- would_add 是预计新增数量；target_titles 是原有数量。
-- extra 是合法历史标题数，允许大于零，不会删除。
+- 每天计划 **UTC 01:05 / 北京时间 09:05**，GitHub 可能延迟，不能保证准点。Fork 的工作流需要自行启用；长期无仓库活动也可能被平台停用。
+- 墨墨 OAuth 刷新凭证按当前官方 CLI 记录约 **90 天**到期，也可能提前撤销或失效。需要时重新登录并导入，不是永久免维护授权。
+- `oauth_client_rejected` 与凭证过期是不同问题，先看[分类排障](docs/troubleshooting.md#oauth-client-rejected)，不要随意修改 OAuth 参数。
 
-以自己的数据为准，不套用他人的历史词数。数字被 GitHub 遮罩为 *** 时，不要关闭凭证遮罩。
+| 你要做的事 | 阅读位置 |
+|---|---|
+| 从零部署、找到下一步操作 | [Windows 教程](docs/windows-setup.md) |
+| 命令找不到、登录失败、同步报错 | [故障排查](docs/troubleshooting.md) |
+| 理解 OAuth、重新授权、固定 Token 手动回退 | [授权与高级配置](docs/maimemo-oauth.md) |
+| 开发、测试、本地运行、Windows 服务 | [开发者说明](docs/development.md) |
+| 查看本次真实用户反馈的核查结论 | [反馈对照与部署验收清单](docs/deployment-feedback.md) |
 
-### 5. 首次手动同步与验收
+## 来源与许可
 
-预检通过后运行 **Sync Words → Run workflow → main**，选择默认 oauth。查看 Run Sync 的刷新、目标读取、新增数量和写后校验。
-
-随后再次运行只读诊断，确认 ready=1、missing=0、would_add=0，无重复或非法标题。不需要重复真实写入来测试去重。无新增的运行只验证读取和幂等，不代表实际测试了写权限。
-
-### 6. 自动运行和维护
-
-计划每天 UTC 01:05，即北京时间 09:05；**GitHub 调度可能明显延迟，不保证准点**。Fork 定时任务可能需要在 Actions 手动启用。首次配置前可先禁用 Sync Words，验收后再启用。
-
-每次先刷新 Access Token，再通过子进程环境交给原 .NET 程序。任务共用并发组。OAuth 出错即停止，不自动回退。
-
-当前 CLI 按首次授权后约 **90 天**记录刷新凭证到期，撤销或服务端策略也可能提前使其失效。届时重复本机登录和导入，不是永久免维护授权。发现 Refresh Token 轮换会停止，不使用公开文件或产物持久化。
-
-查看自动结果：**Actions → Sync Words → 最新运行 → Run Sync**。报错后先排查，不反复重跑。
-
-## 可选固定 Token 回退
-
-仅需要回退时设置 MAIMEMO_TOKEN Secret，手动运行时明确选择 authentication=fixed。定时仍使用 OAuth。固定 Token 不具备本项目的自动续期能力。
-
-Prepare Strict MaiMemo Notebook 是可选手动建本工具，仍需要固定 Token，**会创建词本，不是只读检查**。推荐教程不依赖它，也不要在排障中反复创建。
-
-## 本地运行与开发
-
-原 .NET 控制台和 Windows 服务保留。直接运行这些程序需自行提供有效 Token；独立可执行文件和 Windows 服务不会自动运行 GitHub 的 OAuth 包装脚本。
-
-配置示例见 src/EudicSyncToMaiMemo/appsettings.json。真实授权只保存在本机，不提交。使用 .NET 10 SDK：
-```powershell
-dotnet test src/EudicSyncToMaiMemo.slnx
-npm ci --prefix scripts/maimemo-oauth --ignore-scripts
-npm test --prefix scripts/maimemo-oauth
-pwsh -File scripts/test-maimemo-diagnostics.ps1
-pwsh -File scripts/test-provision-strict-notepad.ps1
-pwsh -File scripts/test-import-maimemo-oauth.ps1
-```
-测试使用模拟数据，不会同步真实词库。打包见 .github/workflows/release.yml 的 v* 标签流程。上游发布包不代表本 Fork 的功能，请使用对应仓库的版本或自行构建。
-
-更多说明：[OAuth](docs/maimemo-oauth.md) · [故障排查](docs/troubleshooting.md)
+Fork 自 [viazure/EudicSyncToMaiMemo](https://github.com/viazure/EudicSyncToMaiMemo)，保留原作者 **viazure** 的署名及 [MIT License](LICENSE)。本 Fork 增加严格标题筛选、安全增量合并、写后校验、OAuth 刷新和只读诊断。通知功能参考 [jeessy2/ddns-go](https://github.com/jeessy2/ddns-go)。感谢真实部署反馈帮助改善教程。

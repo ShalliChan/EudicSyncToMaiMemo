@@ -65,6 +65,11 @@ test('formal workflow defaults to OAuth with explicit fixed-token fallback, neve
   assert.ok(sync.includes("cron: '5 1 * * *'"));
   assert.ok(sync.includes('group: maimemo-user-authorization'));
 });
+
+test('optional notifications use a valid false value when the Secret is absent', () => {
+  const sync = readFileSync(new URL('../../.github/workflows/sync.yml', import.meta.url), 'utf8');
+  assert.ok(sync.includes("Notification__Enabled: ${{ secrets.NOTIFICATION_ENABLED || 'false' }}"));
+});
 test('OAuth read-only diagnostics pass access token via private child environment only', async () => {
   const code = await runDiagnostics({ env: { ...env(), MAIMEMO_STRICT_PREVIEW: 'true' }, getToken: async () => 'new-access',
     launch: (command, args, options) => {

@@ -68,7 +68,11 @@ test('network errors are not labeled expired', async () => {
   assert.equal(result.failure.message, 'refresh_failed_network_or_provider');
 });
 test('client rejection is separate from user expiry', async () => {
-  assert.equal((await scenario({ refreshError: { error: 'invalid_client' } })).failure.message, 'oauth_client_rejected');
+  for (const error of ['invalid_client', 'unauthorized_client']) {
+    const result = await scenario({ refreshError: { error, error_description: 'raw-secret-in-error' } });
+    assert.equal(result.failure.message, 'oauth_client_rejected');
+    assert.deepEqual(result.calls, ['refresh']);
+  }
 });
 test('expired and malformed credentials never reach network', async () => {
   for (const input of ['{', '{}', JSON.stringify({ rt: { token: rt, expireAt: 1 } }), JSON.stringify({ rt: { token: rt, expireAt: '4102444800' } })]) {
