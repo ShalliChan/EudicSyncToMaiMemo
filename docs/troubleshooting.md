@@ -67,15 +67,15 @@ oauth_sync_failed=oauth_client_rejected
 
 ### 已核对的事实与安全的下一步
 
-- 截至 2026-11-08，本项目锁定官方 `@maimemo/memo-api@1.3.1` 和 `openid-client@6.8.4`；issuer、公共 client ID 和 `discovery → refreshTokenGrant` 调用与官方 CLI 1.3.1 源码一致。没有发现应由用户修改客户端参数的证据。
+**维护仓库的实测状态（2026-11-09）：仍待墨墨确认。** 同一提交 `b66d8e2` 的四次定时运行中，11 月 6 日 OAuth 刷新和新增词条的写后 GET 校验均通过；11 月 7–9 日连续三次报 `oauth_client_rejected`，均在读取目标词本前停止，早于 PR #3 合并。脱敏日志无法区分上述两种服务端错误，也无法确认策略是否变更或个人凭证是否仍有效。[11 月 6 日成功记录](https://github.com/ShalliChan/EudicSyncToMaiMemo/actions/runs/42182875400) · [11 月 7 日](https://github.com/ShalliChan/EudicSyncToMaiMemo/actions/runs/42348866174) · [11 月 8 日](https://github.com/ShalliChan/EudicSyncToMaiMemo/actions/runs/42456839012) · [11 月 9 日](https://github.com/ShalliChan/EudicSyncToMaiMemo/actions/runs/42581004667)
+
+- 故障提交锁定官方 `@maimemo/memo-api@1.3.1` 和 `openid-client@6.8.4`，issuer、公共 client ID 和 `discovery → refreshTokenGrant` 调用与官方 CLI 1.3.1 源码一致。没有发现应由用户修改客户端参数的证据。
 - 官方[此前 Issue #4 的回复](https://github.com/maimemo/memo-api-cli/issues/4#issuecomment-6286243219)解释过一次安全策略升级，并要求更新至 1.3.1；那次是**刷新成功后的资源 GET 401**，不能据此断言本次刷新阶段的客户端拒绝已解决。
 - 先确认失败记录的 **Workflow file / commit** 属于当前项目版本，而非复制粘贴改过的工作流；检查自己的 Fork 是否落后。在合并上游更新前阅读差异，不直接降低 Actions 或 .NET 版本。
 - 交给维护者的最小信息：发生时间、失败的步骤、上述错误码、运行链接、代码提交版本。不要附 Token、Secret、授权链接、验证码、完整词本或原始 HTTP 响应。
 - 维护者应对照[官方 OIDC 源码](https://github.com/maimemo/memo-api-cli/blob/main/src/lib/oidc.ts)和[版本信息](https://github.com/maimemo/memo-api-cli/blob/main/package.json)，向墨墨确认客户端策略。若需要官方 CLI 对照，在用户本机用教程的 `notepad list --fields id,title,status` **只读**运行一次，不加 `--verbose`，只报告是否成功和脱敏错误码。CLI 可能复用尚有效的 Access Token，因此一次 list 成功**不证明**刷新端点已恢复。
 - 官方 CLI 1.3.1 自身还会优先使用已配置的固定 API Token，并将多种刷新异常统一提示为“登录已过期”。因此它的成功或“过期”提示都不能单独证明 OAuth 刷新结果；不要删除凭证或开启 verbose 强行取证，维护者需结合本项目已分类的错误码判断。
-- 在没有明确恢复依据前，暂停真实同步并保留现有配置；不要反复重新授权、修改 client ID/scope、关闭安全检查或静默切换固定 Token。确认兼容性已恢复后，先运行只读诊断，再恢复正式同步。
-
-本轮未使用真人凭证复现这个服务端拒绝，也没有声称已修复它。能静态确认的是错误归类和客户端实现一致；具体服务端原因仍需官方或受影响用户验证。
+- 出现客户端拒绝时，暂停真实同步并保留现有配置，不反复授权、修改 client ID/scope、关闭安全检查或切换固定 Token 来验证。官方确认修复或给出兼容性说明后，在受影响仓库运行一次 **MaiMemo Read-only Diagnostics**。以同一次 OAuth 运行中的 `phase=refresh success=1` 和 `target_match=1 strict_target=1` 确认刷新及读取恢复。写入能力须另凭有自然新增的正式同步及写后 GET 校验确认。
 
 ## 按错误阶段处理授权问题
 
