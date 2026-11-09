@@ -23,7 +23,7 @@ OAuth 是在官方页面授权应用访问账号的方式，不要求把墨墨�
 4. Actions 每次读取 Secret，在内存刷新，再 GET 核对目标的 ID、名称和响应结构。正式同步通过后才启动 .NET，诊断只启动 GET 审计。
 5. Access Token 只通过进程环境变量交给子进程，不进入命令参数、仓库、日志、GITHUB_OUTPUT、授权缓存或构建产物。
 
-同步和诊断的目标统一来自 Repository Variable `MAIMEMO_NOTEPAD_ID`；不解析历史硬编码 ID，不回退到他人的词本。目标名称也核对为 `欧路词典同步（严格）`。
+同步和诊断的目标统一来自 Repository Variable `MAIMEMO_NOTEPAD_ID`。OAuth 入口还核对返回的词本名称为 `欧路词典同步（严格）`。
 
 相关工作流共用并发组，不取消正在执行的任务。避免本机或其他仓库同时刷新同一份授权。若服务端返回不同的 Refresh Token，本项目报 `refresh_rotated_stop` 并停止，**不会假装新凭证已持久化**。
 
@@ -59,7 +59,7 @@ OAuth 是在官方页面授权应用访问账号的方式，不要求把墨墨�
 1. 从墨墨官方支持的渠道获取自己的固定 API Token，按其授权与有效期要求使用；网页/实验功能得到的凭证不要当作 OAuth Refresh Token。
 2. 保存为自己仓库的 **Repository Secret `MAIMEMO_TOKEN`**，不能放入 Variable、源码或命令参数。
 3. 先按正常只读流程检查数据；如 OAuth 故障使只读流程无法完成，停止并让维护者协助，不因选择 fixed 而跳过安全预检。
-4. 手动运行 **Sync Words** 时显式将 `authentication` 选为 **fixed**。它仍然执行真实同步及原有安全校验，不是“尝试登录”按钮。
+4. 手动运行 **Sync Words** 时显式将 `authentication` 选为 **fixed**。该分支先检查目标 ID 配置，再直接启动 .NET 执行真实同步，保留正文结构、增量合并及写后校验。它不执行 OAuth 入口的词本名称核对，因此上一步的只读预检仍然必要。
 
 定时任务默认仍是 OAuth；OAuth 失败不会静默切换。fixed 成功不能证明 OAuth 恢复。固定 Token 失效需自己维护，本项目不抓 Cookie、不模拟登录、不提供长期授权服务。
 
